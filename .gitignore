@@ -1,0 +1,8 @@
+.venv/
+.pocket/
+__pycache__/
+*.pyc
+.env
+.jeo/
+ append EOF
+*.egg-info/

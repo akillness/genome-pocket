@@ -5,13 +5,13 @@ description = "Pocket Knowledge Ops: A local-first personal knowledge runtime"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "cocoindex>=1.0.10",
     "sqlite-vec>=0.1.9",
     "sentence-transformers>=3.0.0",
     "click>=8.0.0",
     "python-dotenv>=1.0.0",
     "mcp>=1.0.0",
 ]
+
 
 [project.scripts]
 pocket = "pocket.cli:cli"

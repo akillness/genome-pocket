@@ -18,4 +18,10 @@ pocket = "pocket.cli:cli"
 pocket-mcp = "pocket.mcp_server:main"
 
 [tool.setuptools]
-packages = ["pocket"]
+packages = [
+    "pocket",
+    "cocoindex",
+    "cocoindex.connectors",
+    "cocoindex.ops",
+    "cocoindex.resources",
+]

@@ -3,7 +3,7 @@
 [![Build Status](https://github.com/username/genome-pocket/actions/workflows/ci.yml/badge.svg)](https://github.com/username/genome-pocket/actions)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python Version](https://img.shields.io/badge/python-3.12%2B-blue.svg)](https://www.python.org/downloads/)
-[![CocoIndex v1](https://img.shields.io/badge/CocoIndex-v1.0.10-orange.svg)](https://cocoindex.github.io/)
+[![Self-contained engine](https://img.shields.io/badge/engine-self--contained-green.svg)](#-concept--architecture)
 [![sqlite-vec](https://img.shields.io/badge/sqlite--vec-v0.1.9-blue.svg)](https://github.com/asg017/sqlite-vec)
 
 Sequence your knowledge. Carry the whole map in your pocket.
@@ -35,8 +35,7 @@ Pocket operates on the core mental model of **Target = F(Source)**. All data pro
 ```text
 genome-pocket/
 ├── .pocket/                  # Internal database storage (git-ignored)
-│   ├── cocoindex.db          # CocoIndex internal state
-│   └── pocket_data.db        # SQLite database with chunk embeddings
+│   └── pocket_data.db        # SQLite DB: chunk embeddings + lineage/memo state
 ├── docs/                     # Documentation
 │   ├── architecture/         # System design and data flow
 │   ├── decisions/            # Architecture Decision Records (ADRs)
@@ -45,12 +44,17 @@ genome-pocket/
 │   └── planning/             # Roadmap and sprint backlogs
 
 ├── notes/                    # Local markdown notes directory (source)
-├── pocket/                   # Source code
+├── cocoindex/                # Self-contained ETL engine (vendored, no pip dep)
+│   ├── __init__.py           # App, lifespan, fn, map, mount_each, context
+│   ├── connectors/           # localfs source + sqlite target (lineage/memo)
+│   ├── ops/                  # sentence_transformers embedder + text splitter
+│   └── resources/            # file, chunk, deterministic id helpers
+├── pocket/                   # Application source code
 │   ├── __init__.py
 │   ├── cli.py                # CLI commands (init, update, search)
 │   ├── config.py             # Configuration & environment variables
 │   ├── mcp_server.py         # MCP server interface
-│   └── pipeline.py           # CocoIndex ETL pipeline
+│   └── pipeline.py           # ETL pipeline wiring (uses cocoindex engine)
 ├── .env                      # Environment configuration
 ├── main.py                   # CLI entry point
 ├── pyproject.toml            # Project dependencies and scripts
@@ -77,11 +81,11 @@ uv pip install -e .
 
 ### 3. Configuration
 Create a `.env` file in the root directory:
-```env
-COCOINDEX_DB=./.pocket/cocoindex.db
+env
 POCKET_SOURCE_DIR=./notes
 POCKET_SQLITE_DB=./.pocket/pocket_data.db
-```
+EMBEDDING_MODEL=all-MiniLM-L6-v2
+
 
 ### 4. Usage
 

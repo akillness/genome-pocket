@@ -21,7 +21,7 @@ def init():
     if not welcome_file.exists():
         welcome_file.write_text(
             "# Welcome to Pocket\n\n"
-            "Pocket is a local-first personal Knowledge Ops runtime powered by CocoIndex.\n"
+            "Pocket is a local-first personal Knowledge Ops runtime with a self-contained incremental ETL engine.\n"
             "It indexes your markdown notes and provides semantic search capabilities.\n"
         )
         click.echo(f"Initialized welcome note at {welcome_file}")

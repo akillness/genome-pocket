@@ -14,13 +14,10 @@ class TestPocketPipeline(unittest.TestCase):
         self.source_dir = pathlib.Path(self.temp_dir.name) / "notes"
         self.source_dir.mkdir()
         self.db_path = pathlib.Path(self.temp_dir.name) / "pocket_data.db"
-        self.coco_db_path = pathlib.Path(self.temp_dir.name) / "cocoindex.db"
         
         # Set environment variables for the pipeline to pick up
         self.old_db_env = os.environ.get("POCKET_SQLITE_DB")
-        self.old_coco_env = os.environ.get("COCOINDEX_DB")
         os.environ["POCKET_SQLITE_DB"] = str(self.db_path)
-        os.environ["COCOINDEX_DB"] = str(self.coco_db_path)
         
         # Reload only config to pick up the new env vars
         if "pocket.config" in sys.modules:
@@ -35,11 +32,6 @@ class TestPocketPipeline(unittest.TestCase):
             os.environ["POCKET_SQLITE_DB"] = self.old_db_env
         else:
             os.environ.pop("POCKET_SQLITE_DB", None)
-            
-        if self.old_coco_env is not None:
-            os.environ["COCOINDEX_DB"] = self.old_coco_env
-        else:
-            os.environ.pop("COCOINDEX_DB", None)
             
         # Reload config to restore original env vars
         if "pocket.config" in sys.modules:

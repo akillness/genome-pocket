@@ -3,7 +3,7 @@ import sqlite_vec
 from sentence_transformers import SentenceTransformer
 from mcp.server.fastmcp import FastMCP
 
-from pocket.config import POCKET_SQLITE_DB, EMBEDDING_MODEL
+import pocket.config as config
 
 mcp = FastMCP("pocket")
 
@@ -15,28 +15,32 @@ def search_knowledge(query: str, limit: int = 5) -> str:
         query: The search query.
         limit: Maximum number of results to return.
     """
-    if not POCKET_SQLITE_DB.exists():
+    if not config.POCKET_SQLITE_DB.exists():
         return "Database does not exist. Please run 'pocket update' first."
         
     # Embed the query
-    model = SentenceTransformer(EMBEDDING_MODEL)
+    model = SentenceTransformer(config.EMBEDDING_MODEL)
     query_embedding = model.encode(query, normalize_embeddings=True)
     query_vector = sqlite_vec.serialize_float32(query_embedding)
     
     # Connect to the database
-    conn = sqlite3.connect(str(POCKET_SQLITE_DB))
-    conn.enable_load_extension(True)
-    sqlite_vec.load(conn)
-    conn.enable_load_extension(False)
-    
-    cursor = conn.execute("""
-        SELECT file_path, text, start_offset, end_offset, vec_distance_cosine(embedding, ?) AS distance
-        FROM embeddings
-        ORDER BY distance ASC
-        LIMIT ?
-    """, (query_vector, limit))
-    
-    rows = cursor.fetchall()
+    conn = sqlite3.connect(str(config.POCKET_SQLITE_DB))
+    try:
+        conn.enable_load_extension(True)
+        sqlite_vec.load(conn)
+        conn.enable_load_extension(False)
+        
+        cursor = conn.execute("""
+            SELECT file_path, text, start_offset, end_offset, vec_distance_cosine(embedding, ?) AS distance
+            FROM embeddings
+            ORDER BY distance ASC
+            LIMIT ?
+        """, (query_vector, limit))
+        
+        rows = cursor.fetchall()
+    finally:
+        conn.close()
+        
     if not rows:
         return "No results found."
         
@@ -57,18 +61,22 @@ def get_file_lineage(file_path: str) -> str:
     Args:
         file_path: The path to the source file (e.g., 'notes/welcome.md').
     """
-    if not POCKET_SQLITE_DB.exists():
+    if not config.POCKET_SQLITE_DB.exists():
         return "Database does not exist. Please run 'pocket update' first."
         
-    conn = sqlite3.connect(str(POCKET_SQLITE_DB))
-    cursor = conn.execute("""
-        SELECT id, start_offset, end_offset, SUBSTR(text, 1, 100) AS snippet
-        FROM embeddings
-        WHERE file_path = ?
-        ORDER BY start_offset ASC
-    """, (file_path,))
-    
-    rows = cursor.fetchall()
+    conn = sqlite3.connect(str(config.POCKET_SQLITE_DB))
+    try:
+        cursor = conn.execute("""
+            SELECT id, start_offset, end_offset, SUBSTR(text, 1, 100) AS snippet
+            FROM embeddings
+            WHERE file_path = ?
+            ORDER BY start_offset ASC
+        """, (file_path,))
+        
+        rows = cursor.fetchall()
+    finally:
+        conn.close()
+        
     if not rows:
         return f"No lineage found for file: {file_path}"
         

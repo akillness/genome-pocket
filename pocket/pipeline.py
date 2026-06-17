@@ -12,7 +12,8 @@ from cocoindex.ops.text import RecursiveSplitter
 from cocoindex.resources.id import IdGenerator
 from cocoindex.resources.chunk import Chunk
 
-from pocket.config import POCKET_SOURCE_DIR, POCKET_SQLITE_DB, EMBEDDING_MODEL
+import pocket.config as config
+
 
 # Context key for the embedding model
 EMBEDDER = coco.ContextKey[SentenceTransformerEmbedder]("embedder")
@@ -31,11 +32,14 @@ _splitter = RecursiveSplitter()
 
 @coco.lifespan
 async def coco_lifespan(builder: coco.EnvironmentBuilder) -> AsyncIterator[None]:
+    import os
     # Provide the SentenceTransformerEmbedder
-    builder.provide(EMBEDDER, SentenceTransformerEmbedder(EMBEDDING_MODEL))
+    builder.provide(EMBEDDER, SentenceTransformerEmbedder(config.EMBEDDING_MODEL))
     # Provide the SQLite ManagedConnection
-    builder.provide_with(SQLITE_DB, sqlite.managed_connection(POCKET_SQLITE_DB, load_vec=True))
+    db_path = os.getenv("POCKET_SQLITE_DB") or str(config.POCKET_SQLITE_DB)
+    builder.provide_with(SQLITE_DB, sqlite.managed_connection(db_path, load_vec=True))
     yield
+
 
 @coco.fn
 async def process_chunk(

@@ -14,7 +14,8 @@ Sequence your knowledge. Carry the whole map in your pocket.
 
 ## 🖼️ Concept & Architecture
 
-![Pocket Concept](docs/images/god-tibo-imagen.png)
+![Pocket Concept](docs/images/pocket-architecture.svg)
+
 
 Pocket operates on the core mental model of **Target = F(Source)**. All data processing is incremental ($\Delta$-only), ensuring that only modified files are reprocessed, and deleted files are automatically cleaned up from the database.
 
@@ -40,8 +41,9 @@ genome-pocket/
 │   ├── architecture/         # System design and data flow
 │   ├── decisions/            # Architecture Decision Records (ADRs)
 │   ├── images/               # Concept diagrams and images
-│   │   └── god-tibo-imagen.png
+│   │   └── pocket-architecture.svg
 │   └── planning/             # Roadmap and sprint backlogs
+
 ├── notes/                    # Local markdown notes directory (source)
 ├── pocket/                   # Source code
 │   ├── __init__.py

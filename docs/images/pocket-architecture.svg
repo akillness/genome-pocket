@@ -1,0 +1,135 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 500" width="100%" height="100%">
+  <defs>
+    <!-- Gradients -->
+    <linearGradient id="grad-source" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#4F46E5" />
+      <stop offset="100%" stop-color="#7C3AED" />
+    </linearGradient>
+    <linearGradient id="grad-pipeline" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#2563EB" />
+      <stop offset="100%" stop-color="#3B82F6" />
+    </linearGradient>
+    <linearGradient id="grad-target" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#059669" />
+      <stop offset="100%" stop-color="#10B981" />
+    </linearGradient>
+    <linearGradient id="grad-mcp" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#D97706" />
+      <stop offset="100%" stop-color="#F59E0B" />
+    </linearGradient>
+    <!-- Drop Shadows -->
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="120%">
+      <feDropShadow dx="0" dy="4" stdDeviation="6" flood-color="#000000" flood-opacity="0.1" />
+    </filter>
+    <!-- Marker for Arrows -->
+    <marker id="arrow" viewBox="0 0 10 10" refX="6" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 1.5 L 8 5 L 0 8.5 z" fill="#4B5563" />
+    </marker>
+  </defs>
+
+  <!-- Background -->
+  <rect width="100%" height="100%" fill="#F9FAFB" rx="16" />
+
+  <!-- Title -->
+  <text x="400" y="40" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-size="24" font-weight="bold" fill="#111827">🧬 Pocket Knowledge Ops Architecture</text>
+  <text x="400" y="65" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-size="14" fill="#6B7280">Declarative, Incremental, and Local-First Knowledge Pipeline</text>
+
+  <!-- 1. Source Layer -->
+  <g transform="translate(50, 100)" filter="url(#shadow)">
+    <rect width="180" height="320" rx="12" fill="url(#grad-source)" />
+    <text x="90" y="35" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-size="16" font-weight="bold" fill="#FFFFFF">1. Source (LocalFS)</text>
+    
+    <!-- File 1 -->
+    <g transform="translate(20, 60)">
+      <rect width="140" height="60" rx="8" fill="#FFFFFF" fill-opacity="0.15" stroke="#FFFFFF" stroke-width="1" />
+      <text x="70" y="28" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-size="12" font-weight="600" fill="#FFFFFF">welcome.md</text>
+      <text x="70" y="45" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-size="10" fill="#E0E7FF">Markdown Note</text>
+    </g>
+    
+    <!-- File 2 -->
+    <g transform="translate(20, 140)">
+      <rect width="140" height="60" rx="8" fill="#FFFFFF" fill-opacity="0.15" stroke="#FFFFFF" stroke-width="1" />
+      <text x="70" y="28" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-size="12" font-weight="600" fill="#FFFFFF">ideas.md</text>
+      <text x="70" y="45" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-size="10" fill="#E0E7FF">Research Notes</text>
+    </g>
+
+    <!-- File Watcher -->
+    <g transform="translate(20, 240)">
+      <rect width="140" height="50" rx="8" fill="#4338CA" />
+      <text x="70" y="25" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-size="11" font-weight="bold" fill="#FFFFFF">File Watcher</text>
+      <text x="70" y="40" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-size="9" fill="#C7D2FE">Live Mode (Δ-only)</text>
+    </g>
+  </g>
+
+  <!-- Arrow 1 -> 2 -->
+  <path d="M 230 260 L 290 260" fill="none" stroke="#4B5563" stroke-width="2" marker-end="url(#arrow)" />
+
+  <!-- 2. Transformation Layer (CocoIndex Pipeline) -->
+  <g transform="translate(300, 100)" filter="url(#shadow)">
+    <rect width="200" height="320" rx="12" fill="url(#grad-pipeline)" />
+    <text x="100" y="35" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-size="16" font-weight="bold" fill="#FFFFFF">2. CocoIndex ETL</text>
+
+    <!-- Splitter -->
+    <g transform="translate(20, 60)">
+      <rect width="160" height="60" rx="8" fill="#FFFFFF" />
+      <text x="80" y="28" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-size="12" font-weight="bold" fill="#1E3A8A">RecursiveSplitter</text>
+      <text x="80" y="45" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-size="10" fill="#3B82F6">Size: 1000 | Overlap: 200</text>
+    </g>
+
+    <!-- Embedder -->
+    <g transform="translate(20, 140)">
+      <rect width="160" height="60" rx="8" fill="#FFFFFF" />
+      <text x="80" y="28" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-size="12" font-weight="bold" fill="#1E3A8A">SentenceTransformer</text>
+      <text x="80" y="45" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-size="10" fill="#3B82F6">all-MiniLM-L6-v2</text>
+    </g>
+
+    <!-- IdGenerator -->
+    <g transform="translate(20, 220)">
+      <rect width="160" height="60" rx="8" fill="#FFFFFF" />
+      <text x="80" y="28" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-size="12" font-weight="bold" fill="#1E3A8A">IdGenerator</text>
+      <text x="80" y="45" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-size="10" fill="#3B82F6">Deterministic Chunk IDs</text>
+    </g>
+  </g>
+
+  <!-- Arrow 2 -> 3 -->
+  <path d="M 500 260 L 560 260" fill="none" stroke="#4B5563" stroke-width="2" marker-end="url(#arrow)" />
+
+  <!-- 3. Target Layer -->
+  <g transform="translate(570, 100)" filter="url(#shadow)">
+    <rect width="180" height="320" rx="12" fill="url(#grad-target)" />
+    <text x="90" y="35" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-size="16" font-weight="bold" fill="#FFFFFF">3. Target (SQLite)</text>
+
+    <!-- SQLite DB -->
+    <g transform="translate(20, 60)">
+      <rect width="140" height="70" rx="8" fill="#FFFFFF" />
+      <text x="70" y="25" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-size="12" font-weight="bold" fill="#065F46">sqlite-vec</text>
+      <text x="70" y="42" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-size="10" fill="#059669">Vector Embeddings</text>
+      <text x="70" y="58" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-size="9" fill="#10B981">Cosine Similarity</text>
+    </g>
+
+    <!-- Lineage Metadata -->
+    <g transform="translate(20, 150)">
+      <rect width="140" height="70" rx="8" fill="#FFFFFF" />
+      <text x="70" y="25" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-size="12" font-weight="bold" fill="#065F46">Lineage Table</text>
+      <text x="70" y="42" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-size="10" fill="#059669">file_path, offsets</text>
+      <text x="70" y="58" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-size="9" fill="#10B981">End-to-End Trace</text>
+    </g>
+
+    <!-- Target State -->
+    <g transform="translate(20, 240)">
+      <rect width="140" height="50" rx="8" fill="#047857" />
+      <text x="70" y="25" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-size="11" font-weight="bold" fill="#FFFFFF">Target = F(Source)</text>
+      <text x="70" y="40" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-size="9" fill="#A7F3D0">Auto-Sync &amp; Cleanup</text>
+    </g>
+  </g>
+
+  <!-- 4. MCP Server Layer (Bottom Overlay) -->
+  <g transform="translate(200, 435)" filter="url(#shadow)">
+    <rect width="400" height="50" rx="10" fill="url(#grad-mcp)" />
+    <text x="200" y="30" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-size="14" font-weight="bold" fill="#FFFFFF">🤖 Model Context Protocol (MCP) Server</text>
+  </g>
+
+  <!-- Connectors to MCP -->
+  <path d="M 660 420 L 660 460 L 600 460" fill="none" stroke="#D97706" stroke-width="2" stroke-dasharray="4" marker-end="url(#arrow)" />
+  <path d="M 140 420 L 140 460 L 200 460" fill="none" stroke="#D97706" stroke-width="2" stroke-dasharray="4" marker-end="url(#arrow)" />
+</svg>

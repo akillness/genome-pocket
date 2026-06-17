@@ -147,6 +147,12 @@ async def mount_each(func: Callable, items: Any, *args) -> None:
                 await func(value, *args)
             else:
                 func(value, *args)
+        except BaseException:
+            # Roll back any uncommitted rows this source emitted so a failure
+            # mid-source never leaks partial data into the next commit.
+            if target is not None:
+                target.abort_source(source_key)
+            raise
         finally:
             _current_source_key.reset(token)
         if target is not None:

@@ -29,8 +29,14 @@ class ManagedConnection:
     def execute(self, sql: str, params: tuple = ()):
         return self.conn.execute(sql, params)
 
+    def executemany(self, sql: str, seq_of_params):
+        return self.conn.executemany(sql, seq_of_params)
+
     def commit(self):
         self.conn.commit()
+
+    def rollback(self):
+        self.conn.rollback()
 
 def managed_connection(db_path: str, load_vec: bool = True) -> ManagedConnection:
     return ManagedConnection(db_path, load_vec)
@@ -134,6 +140,11 @@ class TableTarget:
         # Start accumulating the ids emitted for this source during this run.
         self._emitted[source_key] = set()
 
+    def abort_source(self, source_key: str) -> None:
+        # Discard uncommitted rows emitted for a source that failed mid-run.
+        self._emitted.pop(source_key, None)
+        self.conn.rollback()
+
     def _old_row_ids(self, source_key: str) -> set:
         cur = self.conn.execute(
             f"SELECT row_id FROM {self._lineage_table} WHERE source_key = ?",
@@ -142,10 +153,12 @@ class TableTarget:
         return {r[0] for r in cur.fetchall()}
 
     def _delete_rows(self, row_ids: set) -> None:
-        for rid in row_ids:
-            self.conn.execute(
-                f"DELETE FROM {self.table_name} WHERE {self._pk} = ?", (rid,)
-            )
+        if not row_ids:
+            return
+        self.conn.executemany(
+            f"DELETE FROM {self.table_name} WHERE {self._pk} = ?",
+            [(rid,) for rid in row_ids],
+        )
 
     def end_source(self, source_key: str, content_hash: str) -> None:
         """Reconcile this source: drop stale chunks, persist lineage + memo."""
@@ -161,11 +174,11 @@ class TableTarget:
         self.conn.execute(
             f"DELETE FROM {self._lineage_table} WHERE source_key = ?", (source_key,)
         )
-        for rid in new_ids:
-            self.conn.execute(
+        if new_ids:
+            self.conn.executemany(
                 f"INSERT OR IGNORE INTO {self._lineage_table} (source_key, row_id) "
                 f"VALUES (?, ?)",
-                (source_key, rid),
+                [(source_key, rid) for rid in new_ids],
             )
 
         # Persist the memo fingerprint for the incremental fast path.
@@ -230,7 +243,6 @@ class TableTarget:
             """
             
         self.conn.execute(sql, tuple(vals))
-        self.conn.commit()
 
         # Attribute this row to the source item currently being processed so
         # the engine can reconcile/sweep it later.

@@ -187,5 +187,53 @@ class TestPocketPipeline(unittest.TestCase):
         self.assertGreater(self._count_rows("file_path LIKE '%test_note.md'"), 0,
                            "surviving source must keep its chunks")
 
+    def test_abort_source_discards_uncommitted_rows(self):
+        """Transaction safety (unit): abort_source must roll back rows a
+        failed source emitted before they leak into a later source's commit.
+
+        Without abort_source the partial rows of the failed source remain in
+        the connection's pending transaction and get persisted by the next
+        successful end_source commit; this test fails in that case.
+        """
+        from dataclasses import dataclass
+        from cocoindex.connectors import sqlite
+        import cocoindex as coco
+
+        @dataclass
+        class Row:
+            id: int
+            val: str
+
+        async def build():
+            conn = sqlite.ManagedConnection(str(self.db_path), load_vec=False)
+            await conn.__aenter__()
+            try:
+                schema = await sqlite.TableSchema.from_class(Row, primary_key=["id"])
+                target = sqlite.TableTarget(conn, "t", schema)
+
+                # Source A starts, emits a row, then "fails" before end_source.
+                tokA = coco._current_source_key.set("A")
+                target.begin_source("A")
+                target.declare_row(Row(id=1, val="from-A"))
+                coco._current_source_key.reset(tokA)
+                target.abort_source("A")  # failure path
+
+                # Source B processes cleanly and commits.
+                tokB = coco._current_source_key.set("B")
+                target.begin_source("B")
+                target.declare_row(Row(id=2, val="from-B"))
+                coco._current_source_key.reset(tokB)
+                target.end_source("B", "hashB")
+
+                ids = {r[0] for r in conn.execute("SELECT id FROM t").fetchall()}
+                return ids
+            finally:
+                await conn.__aexit__(None, None, None)
+
+        import asyncio
+        ids = asyncio.run(build())
+        self.assertNotIn(1, ids, "aborted source's row must not persist")
+        self.assertIn(2, ids, "committed source's row must persist")
+
 if __name__ == "__main__":
     unittest.main()

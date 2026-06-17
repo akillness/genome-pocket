@@ -50,6 +50,9 @@ class TableSchema:
         return cls(fields, primary_key)
 
 class TableTarget:
+    # Marker so the cocoindex engine recognises this as a lineage-aware target.
+    _is_coco_target = True
+
     def __class_getitem__(cls, item):
         return cls
 
@@ -57,7 +60,12 @@ class TableTarget:
         self.conn = conn
         self.table_name = table_name
         self.schema = schema
+        # Single-column primary key is assumed for lineage tracking.
+        self._pk = schema.primary_key[0]
+        # Per-source set of primary-key values emitted during the current run.
+        self._emitted: Dict[str, set] = {}
         self._create_table()
+        self._create_state_tables()
 
 
     def _create_table(self):
@@ -88,6 +96,105 @@ class TableTarget:
         
         sql = f"CREATE TABLE IF NOT EXISTS {self.table_name} ({', '.join(cols)})"
         self.conn.execute(sql)
+        self.conn.commit()
+
+    # ----- Lineage / memoization state (self-contained, no external deps) -----
+    @property
+    def _lineage_table(self) -> str:
+        return f"_coco_lineage_{self.table_name}"
+
+    @property
+    def _memo_table(self) -> str:
+        return f"_coco_memo_{self.table_name}"
+
+    def _create_state_tables(self):
+        # Maps each source item to the primary-key values it produced, so that
+        # rows can be reconciled on edit and removed when the source disappears.
+        self.conn.execute(
+            f"CREATE TABLE IF NOT EXISTS {self._lineage_table} ("
+            f"source_key TEXT NOT NULL, row_id NOT NULL, "
+            f"PRIMARY KEY (source_key, row_id))"
+        )
+        # Stores the content fingerprint of each source item for memoization.
+        self.conn.execute(
+            f"CREATE TABLE IF NOT EXISTS {self._memo_table} ("
+            f"source_key TEXT PRIMARY KEY, content_hash TEXT)"
+        )
+        self.conn.commit()
+
+    def get_memo(self, source_key: str):
+        cur = self.conn.execute(
+            f"SELECT content_hash FROM {self._memo_table} WHERE source_key = ?",
+            (source_key,),
+        )
+        row = cur.fetchone()
+        return row[0] if row else None
+
+    def begin_source(self, source_key: str) -> None:
+        # Start accumulating the ids emitted for this source during this run.
+        self._emitted[source_key] = set()
+
+    def _old_row_ids(self, source_key: str) -> set:
+        cur = self.conn.execute(
+            f"SELECT row_id FROM {self._lineage_table} WHERE source_key = ?",
+            (source_key,),
+        )
+        return {r[0] for r in cur.fetchall()}
+
+    def _delete_rows(self, row_ids: set) -> None:
+        for rid in row_ids:
+            self.conn.execute(
+                f"DELETE FROM {self.table_name} WHERE {self._pk} = ?", (rid,)
+            )
+
+    def end_source(self, source_key: str, content_hash: str) -> None:
+        """Reconcile this source: drop stale chunks, persist lineage + memo."""
+        new_ids = self._emitted.pop(source_key, set())
+        old_ids = self._old_row_ids(source_key)
+
+        # Chunks that existed before but were not re-emitted are now orphans.
+        stale = old_ids - new_ids
+        if stale:
+            self._delete_rows(stale)
+
+        # Rewrite lineage for this source to exactly the new id set.
+        self.conn.execute(
+            f"DELETE FROM {self._lineage_table} WHERE source_key = ?", (source_key,)
+        )
+        for rid in new_ids:
+            self.conn.execute(
+                f"INSERT OR IGNORE INTO {self._lineage_table} (source_key, row_id) "
+                f"VALUES (?, ?)",
+                (source_key, rid),
+            )
+
+        # Persist the memo fingerprint for the incremental fast path.
+        if content_hash:
+            self.conn.execute(
+                f"INSERT INTO {self._memo_table} (source_key, content_hash) "
+                f"VALUES (?, ?) ON CONFLICT(source_key) DO UPDATE SET "
+                f"content_hash = excluded.content_hash",
+                (source_key, content_hash),
+            )
+        self.conn.commit()
+
+    def sweep(self, live_source_keys: set) -> None:
+        """Remove all target rows whose source items no longer exist."""
+        cur = self.conn.execute(
+            f"SELECT DISTINCT source_key FROM {self._lineage_table}"
+        )
+        known = {r[0] for r in cur.fetchall()}
+        removed = known - {str(k) for k in live_source_keys}
+        for source_key in removed:
+            self._delete_rows(self._old_row_ids(source_key))
+            self.conn.execute(
+                f"DELETE FROM {self._lineage_table} WHERE source_key = ?",
+                (source_key,),
+            )
+            self.conn.execute(
+                f"DELETE FROM {self._memo_table} WHERE source_key = ?",
+                (source_key,),
+            )
         self.conn.commit()
 
     def declare_row(self, row: Any) -> None:
@@ -124,6 +231,14 @@ class TableTarget:
             
         self.conn.execute(sql, tuple(vals))
         self.conn.commit()
+
+        # Attribute this row to the source item currently being processed so
+        # the engine can reconcile/sweep it later.
+        from cocoindex import get_current_source_key
+
+        source_key = get_current_source_key()
+        if source_key is not None:
+            self._emitted.setdefault(source_key, set()).add(getattr(row, self._pk))
 
 async def mount_table_target(
     sqlite_db_key: Any,

@@ -109,5 +109,83 @@ class TestPocketPipeline(unittest.TestCase):
         self.assertIn("Lineage for", lineage_result)
         self.assertIn("Chunk 1", lineage_result)
 
+    def _run(self):
+        from pocket.pipeline import app_main
+        app = coco.App(
+            "pocket_test",
+            app_main,
+            sourcedir=self.source_dir,
+            db_path=self.db_path,
+        )
+        app.update_blocking(live=False, report_to_stdout=False)
+
+    def _count_rows(self, where=""):
+        conn = sqlite3.connect(str(self.db_path))
+        try:
+            sql = "SELECT COUNT(*) FROM embeddings" + (f" WHERE {where}" if where else "")
+            return conn.execute(sql).fetchone()[0]
+        finally:
+            conn.close()
+
+    def test_incremental_memoization(self):
+        """DoD #3: re-running with no edits skips reprocessing; editing one
+        file reprocesses only that file."""
+        import pocket.pipeline as pipeline
+
+        second = self.source_dir / "second.md"
+        second.write_text("# Second\n\nAnother note about pocket knowledge.")
+
+        # Count how many times process_file actually executes per run.
+        original = pipeline.process_file
+        calls = []
+
+        async def counting(file, table):
+            calls.append(str(file.file_path.path))
+            return await original(file, table)
+        counting._coco_fn = True
+        counting._memo = True
+        pipeline.process_file = counting
+        try:
+            # First run: both files processed.
+            self._run()
+            self.assertEqual(len(calls), 2)
+            base_rows = self._count_rows()
+            self.assertGreater(base_rows, 0)
+
+            # Second run, no changes: memoization skips everything.
+            calls.clear()
+            self._run()
+            self.assertEqual(calls, [], "unchanged files must be skipped")
+            self.assertEqual(self._count_rows(), base_rows)
+
+            # Edit only one file: only that file is reprocessed.
+            calls.clear()
+            self.note_file.write_text(
+                "# Test Note\n\nHeavily edited content for pocket knowledge ops."
+            )
+            self._run()
+            self.assertEqual(len(calls), 1)
+            self.assertTrue(calls[0].endswith("test_note.md"))
+        finally:
+            pipeline.process_file = original
+
+    def test_deletion_propagates(self):
+        """DoD #4: deleting a source file removes its chunks from the DB."""
+        second = self.source_dir / "second.md"
+        second.write_text("# Second\n\nAnother note about pocket knowledge.")
+
+        self._run()
+        self.assertGreater(self._count_rows("file_path LIKE '%second.md'"), 0)
+        self.assertGreater(self._count_rows("file_path LIKE '%test_note.md'"), 0)
+
+        # Delete one source file and re-run.
+        second.unlink()
+        self._run()
+
+        self.assertEqual(self._count_rows("file_path LIKE '%second.md'"), 0,
+                         "deleted source must have no chunks")
+        self.assertGreater(self._count_rows("file_path LIKE '%test_note.md'"), 0,
+                           "surviving source must keep its chunks")
+
 if __name__ == "__main__":
     unittest.main()

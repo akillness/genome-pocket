@@ -1,7 +1,10 @@
 """Custom implementation of CocoIndex v1 API."""
 import asyncio
+import contextvars
+import hashlib
 import inspect
 from typing import Any, Callable, Dict, Generic, List, TypeVar, AsyncIterator
+
 
 T = TypeVar("T")
 
@@ -11,6 +14,17 @@ class ContextKey(Generic[T]):
 
 # Global context registry for the current run
 _CONTEXT: Dict[str, Any] = {}
+
+# Tracks which source item (e.g. a file) is currently being processed, so that
+# declare_row can attribute emitted target rows to their originating source.
+# This is the backbone of incremental memoization and deletion propagation.
+_current_source_key: contextvars.ContextVar = contextvars.ContextVar(
+    "coco_current_source_key", default=None
+)
+
+def get_current_source_key():
+    """Return the source key of the item currently being processed, if any."""
+    return _current_source_key.get()
 
 def use_context(key: ContextKey[T]) -> T:
     if key.name not in _CONTEXT:
@@ -68,17 +82,79 @@ async def map(func: Callable, items: Any, *args) -> List[Any]:
         results.append(res)
     return results
 
-async def mount_each(func: Callable, items: Any, *args) -> None:
-    # Mount each item (e.g., file) and process it
-    if hasattr(items, "items"):
-        iterable = items.items()
-    else:
-        iterable = items
-    for key, value in iterable:
-        if inspect.iscoroutinefunction(func):
-            await func(value, *args)
+async def _compute_memo_hash(value: Any) -> str:
+    """Derive a stable content fingerprint for a source item.
+
+    For file-like inputs we hash the actual text content so that any edit
+    changes the fingerprint. For everything else we fall back to repr().
+    """
+    try:
+        if hasattr(value, "read_text"):
+            text = value.read_text()
+            if inspect.isawaitable(text):
+                text = await text
+            payload = text.encode("utf-8")
         else:
-            func(value, *args)
+            payload = repr(value).encode("utf-8")
+    except Exception:
+        # If we cannot read the content, treat it as always-changed.
+        return ""
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _find_target(args: tuple):
+    """Locate the lineage-aware target among the mounted function's arguments."""
+    for a in args:
+        if getattr(a, "_is_coco_target", False):
+            return a
+    return None
+
+
+async def mount_each(func: Callable, items: Any, *args) -> None:
+    """Mount each source item and process it incrementally.
+
+    Implements the declarative ``Target = F(Source)`` contract:
+      * memoization  -> unchanged items (matching stored hash) are skipped;
+      * reconciliation -> reprocessed items drop chunks no longer emitted;
+      * deletion      -> items that vanished from the source are swept from
+                         the target along with their lineage state.
+    """
+    if hasattr(items, "items"):
+        iterable = list(items.items())
+    else:
+        iterable = list(items)
+
+    target = _find_target(args)
+    memo_enabled = bool(getattr(func, "_memo", False))
+    seen_keys = set()
+
+    for key, value in iterable:
+        source_key = str(key)
+        seen_keys.add(source_key)
+
+        new_hash = await _compute_memo_hash(value)
+        if target is not None and memo_enabled and new_hash:
+            stored_hash = target.get_memo(source_key)
+            if stored_hash is not None and stored_hash == new_hash:
+                # Unchanged source: skip all work (incremental fast path).
+                continue
+
+        token = _current_source_key.set(source_key)
+        if target is not None:
+            target.begin_source(source_key)
+        try:
+            if inspect.iscoroutinefunction(func):
+                await func(value, *args)
+            else:
+                func(value, *args)
+        finally:
+            _current_source_key.reset(token)
+        if target is not None:
+            target.end_source(source_key, new_hash)
+
+    # Garbage-collect target rows whose source items no longer exist.
+    if target is not None:
+        target.sweep(seen_keys)
 
 class App:
     def __init__(self, name: str, main_func: Callable, **kwargs):

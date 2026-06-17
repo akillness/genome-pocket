@@ -5,4 +5,8 @@ echo "Running MCP tools test..."
 uv run python -m unittest tests.test_pipeline.TestPocketPipeline.test_mcp_tools
 echo "Running pipeline and search test..."
 uv run python -m unittest tests.test_pipeline.TestPocketPipeline.test_pipeline_and_search
+echo "Running incremental memoization test (DoD #3)..."
+uv run python -m unittest tests.test_pipeline.TestPocketPipeline.test_incremental_memoization
+echo "Running deletion propagation test (DoD #4)..."
+uv run python -m unittest tests.test_pipeline.TestPocketPipeline.test_deletion_propagates
 echo "All tests passed successfully!"

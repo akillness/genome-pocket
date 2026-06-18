@@ -28,7 +28,7 @@ This backlog contains user stories and tasks categorized by priority. It serves 
   - *Tasks:* Set up SQLite with `sqlite-vec` or local LanceDB target schema.
 - [ ] **POCKET-104: Incremental Chunking & Embedding Pipeline**
   - *User Story:* As a user, I want only modified files to be re-embedded so that I save local compute and API costs.
-  - *Tasks:* Implement `@coco.fn(memo=True)` for file processing, chunking with `RecursiveSplitter`, and embedding generation.
+  - *Tasks:* Implement `@pix.fn(memo=True)` for file processing, chunking with `RecursiveSplitter`, and embedding generation.
 - [ ] **POCKET-105: Lineage Metadata Storage**
   - *User Story:* As an auditor, I want to see the exact source file and character range for every chunk so that I can verify the source of truth.
   - *Tasks:* Store file path, start/end offsets, and source hash in the target database.

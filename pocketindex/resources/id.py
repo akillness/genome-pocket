@@ -1,4 +1,4 @@
-"""Deterministic ID generator for CocoIndex."""
+"""Deterministic ID generator for PocketIndex."""
 import hashlib
 
 class IdGenerator:

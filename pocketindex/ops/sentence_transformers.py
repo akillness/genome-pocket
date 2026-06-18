@@ -1,4 +1,4 @@
-"""SentenceTransformer embedder for CocoIndex."""
+"""SentenceTransformer embedder for PocketIndex."""
 from sentence_transformers import SentenceTransformer
 
 class SentenceTransformerEmbedder:

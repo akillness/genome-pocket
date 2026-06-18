@@ -10,18 +10,21 @@ dependencies = [
     "click>=8.0.0",
     "python-dotenv>=1.0.0",
     "mcp>=1.0.0",
+    "starlette>=0.37.0",
+    "uvicorn>=0.29.0",
 ]
 
 
 [project.scripts]
 pocket = "pocket.cli:cli"
 pocket-mcp = "pocket.mcp_server:main"
+pocket-api = "pocket.api_server:main"
 
 [tool.setuptools]
 packages = [
     "pocket",
-    "cocoindex",
-    "cocoindex.connectors",
-    "cocoindex.ops",
-    "cocoindex.resources",
+    "pocketindex",
+    "pocketindex.connectors",
+    "pocketindex.ops",
+    "pocketindex.resources",
 ]

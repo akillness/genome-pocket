@@ -13,10 +13,10 @@ Represents a single text chunk, its vector embedding, and its source lineage. Th
 from dataclasses import dataclass
 from typing import Annotated
 from numpy.typing import NDArray
-import cocoindex as coco
+import pocketindex as pix
 
 # Context key for the embedding model
-EMBEDDER = coco.ContextKey["SentenceTransformerEmbedder"]("embedder")
+EMBEDDER = pix.ContextKey["SentenceTransformerEmbedder"]("embedder")
 
 @dataclass
 class ChunkEmbedding:
@@ -45,18 +45,18 @@ class ConceptRelation:
 ## Core Interfaces
 
 ### 1. Pipeline Main Function
-The entry point for the CocoIndex application. It mounts the target tables and starts the filesystem walker.
+The entry point for the PocketIndex application. It mounts the target tables and starts the filesystem walker.
 
 ```python
 import pathlib
-import cocoindex as coco
-from cocoindex.connectors import localfs, sqlite
+import pocketindex as pix
+from pocketindex.connectors import localfs, sqlite
 
-@coco.fn
+@pix.fn
 async def app_main(sourcedir: pathlib.Path, db_path: pathlib.Path) -> None:
     # 1. Mount SQLite target table
     conn = sqlite.connect(db_path, load_vec="auto")
-    sqlite_db = coco.ContextKey[sqlite.ManagedConnection]("sqlite_db")
+    sqlite_db = pix.ContextKey[sqlite.ManagedConnection]("sqlite_db")
     # Provide connection in the current context
     # (Note: usually provided in lifespan, but can be mounted directly)
     
@@ -70,40 +70,40 @@ async def app_main(sourcedir: pathlib.Path, db_path: pathlib.Path) -> None:
     files = localfs.walk_dir(sourcedir, recursive=True, live=True)
     
     # 3. Mount file processing component
-    await coco.mount_each(process_file, files.items(), target_table)
+    await pix.mount_each(process_file, files.items(), target_table)
 ```
 
 ### 2. File Processing Component
 Processes a single file, splits it into chunks, and maps them to the target table.
 
 ```python
-from cocoindex.resources.file import FileLike
-from cocoindex.ops.text import RecursiveSplitter
-from cocoindex.resources.id import IdGenerator
+from pocketindex.resources.file import FileLike
+from pocketindex.ops.text import RecursiveSplitter
+from pocketindex.resources.id import IdGenerator
 
 _splitter = RecursiveSplitter()
 
-@coco.fn(memo=True)
+@pix.fn(memo=True)
 async def process_file(file: FileLike, table: sqlite.TableTarget[ChunkEmbedding]) -> None:
     text = await file.read_text()
     chunks = _splitter.split(text, chunk_size=1000, chunk_overlap=200)
     id_gen = IdGenerator()
     
-    await coco.map(process_chunk, chunks, file.file_path.path, id_gen, table)
+    await pix.map(process_chunk, chunks, file.file_path.path, id_gen, table)
 ```
 
 ### 3. Chunk Processing Component
 Generates the embedding and declares the row in the target table.
 
 ```python
-from cocoindex.resources.chunk import Chunk
+from pocketindex.resources.chunk import Chunk
 
-@coco.fn
+@pix.fn
 async def process_chunk(
     chunk: Chunk, filename: pathlib.PurePath,
     id_gen: IdGenerator, table: sqlite.TableTarget[ChunkEmbedding],
 ) -> None:
-    embedder = coco.use_context(EMBEDDER)
+    embedder = pix.use_context(EMBEDDER)
     embedding = await embedder.embed(chunk.text)
     
     table.declare_row(row=ChunkEmbedding(

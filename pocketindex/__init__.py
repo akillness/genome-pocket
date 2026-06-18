@@ -1,4 +1,4 @@
-"""Custom implementation of CocoIndex v1 API."""
+"""Custom implementation of PocketIndex v1 API."""
 import asyncio
 import contextvars
 import hashlib
@@ -19,7 +19,7 @@ _CONTEXT: Dict[str, Any] = {}
 # declare_row can attribute emitted target rows to their originating source.
 # This is the backbone of incremental memoization and deletion propagation.
 _current_source_key: contextvars.ContextVar = contextvars.ContextVar(
-    "coco_current_source_key", default=None
+    "pocket_current_source_key", default=None
 )
 
 def get_current_source_key():
@@ -36,12 +36,9 @@ class EnvironmentBuilder:
         _CONTEXT[key.name] = value
 
     def provide_with(self, key: ContextKey[T], value: Any) -> None:
-        # value can be a context manager or direct value
-        if hasattr(value, "__aenter__"):
-            # We will handle async context managers in the App lifecycle
-            _CONTEXT[key.name] = value
-        else:
-            _CONTEXT[key.name] = value
+        # Store the value (which may be an async context manager); App.run_async
+        # is what actually enters/exits any __aenter__-capable value later.
+        _CONTEXT[key.name] = value
 
 _lifespan_func: Callable[[EnvironmentBuilder], AsyncIterator[None]] = None
 
@@ -54,20 +51,20 @@ def fn(func_or_memo=None, **kwargs):
     if func_or_memo is None:
         # Used as @fn(memo=True)
         def decorator(f):
-            f._coco_fn = True
+            f._pix_fn = True
             f._memo = kwargs.get("memo", False)
             return f
         return decorator
     elif isinstance(func_or_memo, bool):
         # Used as @fn(True)
         def decorator(f):
-            f._coco_fn = True
+            f._pix_fn = True
             f._memo = func_or_memo
             return f
         return decorator
     else:
         # Used as @fn
-        func_or_memo._coco_fn = True
+        func_or_memo._pix_fn = True
         func_or_memo._memo = False
         return func_or_memo
 
@@ -105,7 +102,7 @@ async def _compute_memo_hash(value: Any) -> str:
 def _find_target(args: tuple):
     """Locate the lineage-aware target among the mounted function's arguments."""
     for a in args:
-        if getattr(a, "_is_coco_target", False):
+        if getattr(a, "_is_pix_target", False):
             return a
     return None
 

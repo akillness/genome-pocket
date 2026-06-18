@@ -1,4 +1,4 @@
-"""File resource for CocoIndex."""
+"""File resource for PocketIndex."""
 import pathlib
 
 class FilePath:

@@ -1,4 +1,4 @@
-"""SQLite target connector for CocoIndex."""
+"""SQLite target connector for PocketIndex."""
 import sqlite3
 import sqlite_vec
 import pathlib
@@ -48,21 +48,19 @@ class TableSchema:
 
     @classmethod
     async def from_class(cls, klass: Type, primary_key: List[str]) -> "TableSchema":
-        # Extract fields and types from dataclass
+        # Extract fields and types from the dataclass's type hints.
         hints = get_type_hints(klass, include_extras=True)
-        fields = {}
-        for name, hint in hints.items():
-            fields[name] = hint
-        return cls(fields, primary_key)
+        return cls(dict(hints), primary_key)
 
 class TableTarget:
-    # Marker so the cocoindex engine recognises this as a lineage-aware target.
-    _is_coco_target = True
+    # Marker so the pocketindex engine recognises this as a lineage-aware target.
+    _is_pix_target = True
 
     def __class_getitem__(cls, item):
         return cls
 
-    def __init__(self, conn: ManagedConnection, table_name: str, schema: TableSchema):
+    def __init__(self, conn: ManagedConnection, table_name: str, schema: TableSchema,
+                 fts_text_column: str = None):
         self.conn = conn
         self.table_name = table_name
         self.schema = schema
@@ -70,8 +68,15 @@ class TableTarget:
         self._pk = schema.primary_key[0]
         # Per-source set of primary-key values emitted during the current run.
         self._emitted: Dict[str, set] = {}
+        # Optional lexical (FTS5) companion index for hybrid retrieval. When a
+        # text column is named, every declared row is mirrored into an external
+        # FTS5 table keyed by the primary key, so the same target supports both
+        # vector (sqlite-vec) and lexical (BM25) search from one declaration.
+        self._fts_text_column = fts_text_column if fts_text_column in schema.fields else None
         self._create_table()
         self._create_state_tables()
+        if self._fts_text_column is not None:
+            self._create_fts_table()
 
 
     def _create_table(self):
@@ -107,11 +112,51 @@ class TableTarget:
     # ----- Lineage / memoization state (self-contained, no external deps) -----
     @property
     def _lineage_table(self) -> str:
-        return f"_coco_lineage_{self.table_name}"
+        return f"_pocket_lineage_{self.table_name}"
 
     @property
     def _memo_table(self) -> str:
-        return f"_coco_memo_{self.table_name}"
+        return f"_pocket_memo_{self.table_name}"
+
+    @property
+    def _fts_table(self) -> str:
+        return f"_pocket_fts_{self.table_name}"
+
+    def _create_fts_table(self):
+        # External-content-free FTS5 index: we store the primary key as an
+        # unindexed column alongside the searchable text so we can join back to
+        # the main table (and its embeddings/lineage) after a BM25 match.
+        try:
+            self.conn.execute(
+                f"CREATE VIRTUAL TABLE IF NOT EXISTS {self._fts_table} "
+                f"USING fts5(row_id UNINDEXED, content)"
+            )
+            self.conn.commit()
+        except sqlite3.OperationalError as exc:
+            # FTS5 missing in this SQLite build: degrade to vector-only loading
+            # rather than breaking the whole pipeline.
+            self._fts_text_column = None
+            print(f"[pocketindex.sqlite] FTS5 unavailable, lexical index disabled: {exc}")
+
+    def _fts_delete_rows(self, row_ids: set) -> None:
+        if self._fts_text_column is None or not row_ids:
+            return
+        self.conn.executemany(
+            f"DELETE FROM {self._fts_table} WHERE row_id = ?",
+            [(rid,) for rid in row_ids],
+        )
+
+    def _fts_upsert(self, row_id, content: str) -> None:
+        if self._fts_text_column is None:
+            return
+        # FTS5 has no UPSERT; delete-then-insert keeps it idempotent.
+        self.conn.execute(
+            f"DELETE FROM {self._fts_table} WHERE row_id = ?", (row_id,)
+        )
+        self.conn.execute(
+            f"INSERT INTO {self._fts_table} (row_id, content) VALUES (?, ?)",
+            (row_id, content),
+        )
 
     def _create_state_tables(self):
         # Maps each source item to the primary-key values it produced, so that
@@ -159,6 +204,8 @@ class TableTarget:
             f"DELETE FROM {self.table_name} WHERE {self._pk} = ?",
             [(rid,) for rid in row_ids],
         )
+        # Keep the lexical index in lockstep with the primary table.
+        self._fts_delete_rows(row_ids)
 
     def end_source(self, source_key: str, content_hash: str) -> None:
         """Reconcile this source: drop stale chunks, persist lineage + memo."""
@@ -244,9 +291,14 @@ class TableTarget:
             
         self.conn.execute(sql, tuple(vals))
 
+        # Mirror the searchable text into the lexical (FTS5) index so the same
+        # declared row is retrievable by both vector and keyword search.
+        if self._fts_text_column is not None:
+            self._fts_upsert(getattr(row, self._pk), getattr(row, self._fts_text_column))
+
         # Attribute this row to the source item currently being processed so
         # the engine can reconcile/sweep it later.
-        from cocoindex import get_current_source_key
+        from pocketindex import get_current_source_key
 
         source_key = get_current_source_key()
         if source_key is not None:
@@ -256,8 +308,9 @@ async def mount_table_target(
     sqlite_db_key: Any,
     table_name: str,
     table_schema: TableSchema,
+    fts_text_column: str = None,
 ) -> TableTarget:
     # Retrieve connection from context
-    from cocoindex import use_context
+    from pocketindex import use_context
     conn = use_context(sqlite_db_key)
-    return TableTarget(conn, table_name, table_schema)
+    return TableTarget(conn, table_name, table_schema, fts_text_column=fts_text_column)

@@ -1,7 +1,7 @@
-"""Local filesystem connector for CocoIndex."""
+"""Local filesystem connector for PocketIndex."""
 import pathlib
 from typing import Dict
-from cocoindex.resources.file import FileLike
+from pocketindex.resources.file import FileLike
 
 class LocalFS:
     def __init__(self, sourcedir: pathlib.Path):

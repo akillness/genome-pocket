@@ -59,3 +59,30 @@ This backlog contains user stories and tasks categorized by priority. It serves 
 - [ ] **POCKET-303: Automated Retrieval Evaluation**
   - *User Story:* As a developer, I want to run automated evaluations on my retrieval pipeline so that I can prevent regression when changing chunk sizes or models.
   - *Tasks:* Set up a local evaluation script using synthetic query-context pairs.
+
+---
+
+## Engine Parity Backlog (cocoindex cross-check)
+
+Tracked against an installed upstream `cocoindex` (1.0.11) to find features the
+vendored `pocketindex` engine is missing. Verified by installing cocoindex in an
+isolated venv and diffing its public API against `pocketindex`.
+
+- [x] **POCKET-401: Run Statistics / Monitoring** *(done)*
+  - *Gap:* upstream exposes `UpdateStats`/`ComponentStats`; pocketindex reported nothing.
+  - *Delivered:* `pocketindex/stats.py`, stats threaded through `mount_each`, surfaced on CLI; `sweep()` now returns deletion counts. Tests: `test_run_reports_stats`.
+- [x] **POCKET-402: Real Live-Mode Watching** *(done)*
+  - *Gap:* `pocket update -L` was a no-op (the `live` flag was ignored end to end).
+  - *Delivered:* polling re-run loop in `App.run_async` (`--interval`), clean stop on Ctrl+C. Tests: `test_live_mode_picks_up_new_file`.
+- [x] **POCKET-403: Code-Aware Splitting** *(done)*
+  - *Gap:* upstream `cocoindex.ops.text` ships `SeparatorSplitter`, `CustomLanguageConfig`, and `detect_code_language`; pocketindex only had a single character-based `RecursiveSplitter`.
+  - *Delivered:* rewrote `pocketindex/ops/text.py` as a dependency-free mirror of the upstream surface — `detect_code_language`, `SeparatorSplitter`, `CustomLanguageConfig`, and a language-aware `RecursiveSplitter` (per-language structural separators, offset-exact chunks, backward-compatible `split(text, chunk_size, chunk_overlap)`). Added an indentation-preserving `code=True` path to `TextRefiner`, taught `localfs` to index recognized source files, and routed `pocket/pipeline.py` to detect language → code-refine + structural split. Tests: `TestCodeAwareSplitting` (8) + `test_code_file_lineage_and_boundaries`.
+- [~] **POCKET-404: LLM & Entity-Resolution Ops** *(404a + ops delivered; 404b/c/d in progress — see `docs/architecture/graph-target.md`)*
+  - *Gap:* upstream offers `ops.litellm` (LLM extraction) and `ops.entity_resolution` (faiss-backed dedup); pocketindex had neither, and both needed a graph target that did not exist.
+  - *Delivered (404a + offline ops):* local-first GraphRAG layer landed. SQLite-resident `entities`/`relations` tables (`pocket/pipeline.py` `EntityNode`/`RelationEdge`) reuse the existing lineage/memo/sweep machinery — `pocket update --graph` (or `POCKET_GRAPH=1`) extracts a subgraph, re-extracts on edit, and sweeps a file's whole subgraph on deletion. `pocketindex/ops/extract.py` ships the extraction op with three backends behind one `ExtractionModel` protocol: `DeterministicExtractor` (default, no LLM/network/deps — makes the graph offline-testable), `OllamaExtractor` (local daemon), and **`AirLLMExtractor`** (local in-process airLLM, optional `genome-pocket[airllm]` extra). `pocketindex/ops/entity_resolution.py` does cost-effective blocking → cheap filters → optional LLM adjudication → label propagation over sqlite-vec embeddings (no faiss). Retrieval gained `graph_neighborhood`/`format_neighborhood` + `pocket graph <entity>`; `admin.drop_target` now clears graph tables. Tests: `TestGraphExtraction` (6) + `TestGraphTarget` (6).
+  - *Design note:* **airLLM replaces LiteLLM** as the heavy-model backend — a hosted proxy is the wrong default for Pocket's privacy/local-first DNA, and airLLM layer-shards a 70B-class model onto a single 4GB GPU so even a large extractor runs entirely on-device. Spec grounded in a 2025–2026 arXiv survey (MemGraphRAG, FlowRAG, schema-agnostic + uncertainty-guided KG construction, cost-effective LLM entity resolution).
+  - *Remaining:* **404b** harden the airLLM/Ollama JSON-extraction prompt + memoize the extraction op on (chunk, model, prompt-version); **404c** persist resolution rationale/evidence for adjudicated merges; **404d** fuse graph hits into the RRF retriever as a third list (`mode="graph"`/`"hybrid"`) + MCP `traverse_graph`; HITL approval for low-confidence facts folds into POCKET-302.
+
+- [x] **POCKET-405: `show` / `drop` / `ls` Lifecycle Commands** *(done)*
+  - *Gap:* upstream CLI has `show`, `drop`, `ls` for inspecting stable paths and dropping target state; pocket only had `init`/`update`/`search`/`serve`.
+  - *Delivered:* `pocket ls` (per-source chunk counts + offset spans), `pocket show [PATH]` (index summary or per-source chunk lineage), and `pocket drop [PATH] [--yes]` (full-index reset or single-source eviction of chunks + FTS mirror + lineage/memo). Read helpers `retrieval.list_sources`/`retrieval.target_stats`; write-side `pocket/admin.py` (`drop_target`/`drop_source`). Tests: `TestLifecycleCommands` (6).

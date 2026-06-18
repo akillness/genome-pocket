@@ -13,6 +13,20 @@ POCKET_SOURCE_DIR = Path(os.getenv("POCKET_SOURCE_DIR", str(BASE_DIR / "notes"))
 POCKET_SQLITE_DB = Path(os.getenv("POCKET_SQLITE_DB", str(BASE_DIR / ".pocket" / "pocket_data.db")))
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "all-MiniLM-L6-v2")
 
+# --- Knowledge-graph (GraphRAG) configuration (POCKET-404) ---
+# The graph branch is opt-in: only when POCKET_GRAPH is truthy (or `pocket update
+# --graph` is used) does the pipeline extract entities/relations. With it off the
+# pipeline is exactly the vector/lexical path — zero extra cost or dependency.
+def _truthy(val: str) -> bool:
+    return str(val).strip().lower() in ("1", "true", "yes", "on")
+
+POCKET_GRAPH = _truthy(os.getenv("POCKET_GRAPH", ""))
+# Extraction backend: deterministic (default, offline) | ollama | airllm.
+POCKET_LLM_PROVIDER = os.getenv("POCKET_LLM_PROVIDER", "deterministic")
+POCKET_LLM_MODEL = os.getenv("POCKET_LLM_MODEL")  # backend-specific default if None
+# Facts below this confidence are staged for HITL review, not committed directly.
+POCKET_GRAPH_MIN_CONFIDENCE = float(os.getenv("POCKET_GRAPH_MIN_CONFIDENCE", "0.0"))
+
 # Ensure directories exist
 POCKET_SOURCE_DIR.mkdir(parents=True, exist_ok=True)
 POCKET_SQLITE_DB.parent.mkdir(parents=True, exist_ok=True)

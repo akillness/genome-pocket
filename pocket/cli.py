@@ -28,21 +28,45 @@ def init():
 
 @cli.command()
 @click.option("-L", "--live", is_flag=True, help="Run in live mode (watch for changes)")
-def update(live):
+@click.option(
+    "--interval",
+    default=2.0,
+    type=float,
+    help="Polling interval (seconds) between live-mode passes.",
+)
+@click.option(
+    "--graph",
+    is_flag=True,
+    help="Also extract a knowledge graph (entities/relations) from notes. "
+    "Opt-in; uses the local extractor selected by POCKET_LLM_PROVIDER.",
+)
+def update(live, interval, graph):
     """Run the indexing pipeline to process notes."""
-    click.echo(f"Starting indexing pipeline (live={live})...")
-    
+    click.echo(f"Starting indexing pipeline (live={live}, graph={graph})...")
+
     # Create the app using the default environment (which has the lifespan registered)
     app = pix.App(
         "pocket",
         app_main,
         sourcedir=POCKET_SOURCE_DIR,
         db_path=POCKET_SQLITE_DB,
+        graph=graph,
     )
-    
-    # Run the update
-    app.update_blocking(live=live, report_to_stdout=True)
-    click.echo("Indexing pipeline completed.")
+
+    # Run the update. The engine prints per-component stats after each pass.
+    stats = app.update_blocking(
+        live=live, report_to_stdout=True, live_interval=interval
+    )
+    if stats is not None and not live:
+        total = stats.total
+        click.echo(
+            "Indexing pipeline completed: "
+            f"{total.num_adds} added, {total.num_reprocesses} reprocessed, "
+            f"{total.num_unchanged} unchanged, {total.num_deletes} deleted, "
+            f"{total.num_errors} errors."
+        )
+    else:
+        click.echo("Indexing pipeline completed.")
 
 @cli.command()
 @click.argument("query")
@@ -76,6 +100,113 @@ def serve(host, port):
     click.echo(f"Starting Pocket API server on http://{host}:{port} ...")
     uvicorn.run(create_app(), host=host, port=port)
 
+
+@cli.command(name="ls")
+def ls_cmd():
+    """List indexed source files (stable paths) with their chunk counts."""
+    from pocket import retrieval
+
+    if not POCKET_SQLITE_DB.exists():
+        click.echo("Database does not exist. Please run 'pocket update' first.")
+        return
+    sources = retrieval.list_sources()
+    if not sources:
+        click.echo("No indexed sources found.")
+        return
+    click.echo(f"{'CHUNKS':>7}  {'OFFSETS':>15}  SOURCE")
+    for s in sources:
+        offsets = f"{s['first_offset']}-{s['last_offset']}"
+        click.echo(f"{s['chunks']:>7}  {offsets:>15}  {s['file_path']}")
+    click.echo(f"\n{len(sources)} source(s) indexed.")
+
+
+@cli.command()
+@click.argument("file_path", required=False)
+def show(file_path):
+    """Show target state. With no argument, summarize the whole index; with a
+    FILE_PATH, show that source's chunk lineage (ids and offsets)."""
+    from pocket import retrieval
+
+    if not POCKET_SQLITE_DB.exists():
+        click.echo("Database does not exist. Please run 'pocket update' first.")
+        return
+
+    if file_path is None:
+        stats = retrieval.target_stats()
+        click.echo(f"Database:     {POCKET_SQLITE_DB}")
+        click.echo(f"Sources:      {stats['sources']}")
+        click.echo(f"Chunks:       {stats['chunks']}")
+        click.echo(
+            f"Lexical (FTS): {'enabled' if stats['fts_enabled'] else 'disabled'}"
+        )
+        return
+
+    lineage = retrieval.get_lineage(file_path)
+    if not lineage:
+        click.echo(f"No chunks found for source: {file_path}")
+        return
+    click.echo(f"Lineage for {file_path} ({len(lineage)} chunk(s)):")
+    for idx, c in enumerate(lineage, 1):
+        click.echo(
+            f"  Chunk {idx} [id={c['chunk_id']}] "
+            f"chars {c['start_offset']}-{c['end_offset']}: {c['snippet']}"
+        )
+
+
+@cli.command()
+@click.argument("file_path", required=False)
+@click.option(
+    "--yes", is_flag=True, help="Skip the confirmation prompt."
+)
+def drop(file_path, yes):
+    """Drop materialized target state. With no argument, reset the entire
+    index; with a FILE_PATH, evict only that source's chunks and lineage."""
+    from pocket import admin
+
+    if not POCKET_SQLITE_DB.exists():
+        click.echo("Database does not exist. Nothing to drop.")
+        return
+
+    if file_path is not None:
+        if not yes and not click.confirm(
+            f"Drop all chunks for source '{file_path}'?"
+        ):
+            click.echo("Aborted.")
+            return
+        result = admin.drop_source(file_path)
+        click.echo(f"Removed {result['removed']} chunk(s) for {file_path}.")
+        return
+
+    if not yes and not click.confirm(
+        "Drop the ENTIRE index (all sources and lineage)?"
+    ):
+        click.echo("Aborted.")
+        return
+    result = admin.drop_target()
+    if not result["existed"]:
+        click.echo("Index was already empty.")
+        return
+    click.echo(
+        f"Dropped {result['chunks']} chunk(s) across {result['sources']} "
+        f"source(s). Tables removed: {', '.join(result['dropped'])}."
+    )
+
+
+@cli.command()
+@click.argument("entity")
+@click.option("--limit", default=10, help="Max number of relations to show.")
+def graph(entity, limit):
+    """Print a knowledge-graph entity's neighborhood (relations).
+
+    Requires a graph built with `pocket update --graph`.
+    """
+    from pocket import retrieval
+
+    if not POCKET_SQLITE_DB.exists():
+        click.echo("Database does not exist. Please run 'pocket update --graph' first.")
+        return
+    node = retrieval.graph_neighborhood(entity, limit=limit)
+    click.echo(retrieval.format_neighborhood(node))
 
 if __name__ == "__main__":
     cli()

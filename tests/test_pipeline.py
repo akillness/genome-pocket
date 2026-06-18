@@ -179,6 +179,93 @@ class TestPocketPipeline(unittest.TestCase):
         self.assertGreater(self._count_rows("file_path LIKE '%test_note.md'"), 0,
                            "surviving source must keep its chunks")
 
+    def test_run_reports_stats(self):
+        """Monitoring: a run returns UpdateStats with per-component counters that
+        reflect adds, then unchanged, then reprocesses, then deletes."""
+        from pocket.pipeline import app_main
+
+        second = self.source_dir / "second.md"
+        second.write_text("# Second\n\nAnother note about pocket knowledge.")
+
+        def make_app():
+            return pix.App(
+                "pocket_test",
+                app_main,
+                sourcedir=self.source_dir,
+                db_path=self.db_path,
+            )
+
+        # First run: both files are brand-new adds.
+        stats = make_app().update_blocking(live=False, report_to_stdout=False)
+        self.assertIsNotNone(stats)
+        total = stats.total
+        self.assertEqual(total.num_adds, 2)
+        self.assertEqual(total.num_unchanged, 0)
+        self.assertEqual(total.num_deletes, 0)
+        self.assertEqual(total.num_errors, 0)
+        # Stats are bucketed by the processor name.
+        self.assertIn("process_file", stats.by_component)
+
+        # Second run, no edits: everything is unchanged (memoized fast path).
+        stats = make_app().update_blocking(live=False, report_to_stdout=False)
+        total = stats.total
+        self.assertEqual(total.num_unchanged, 2)
+        self.assertEqual(total.num_adds, 0)
+        self.assertEqual(total.num_reprocesses, 0)
+
+        # Edit one file: it is reprocessed, the other stays unchanged.
+        self.note_file.write_text("# Test Note\n\nEdited content for stats check.")
+        stats = make_app().update_blocking(live=False, report_to_stdout=False)
+        total = stats.total
+        self.assertEqual(total.num_reprocesses, 1)
+        self.assertEqual(total.num_unchanged, 1)
+        self.assertEqual(total.num_adds, 0)
+
+        # Delete one file: it is swept and counted as a delete.
+        second.unlink()
+        stats = make_app().update_blocking(live=False, report_to_stdout=False)
+        total = stats.total
+        self.assertEqual(total.num_deletes, 1)
+
+    def test_live_mode_picks_up_new_file(self):
+        """Live mode: a file created after the first pass is indexed by a later
+        polling pass, then the watcher stops cleanly."""
+        import asyncio
+        from pocket.pipeline import app_main
+
+        app = pix.App(
+            "pocket_test",
+            app_main,
+            sourcedir=self.source_dir,
+            db_path=self.db_path,
+        )
+
+        async def drive():
+            run = asyncio.create_task(
+                app.run_async(
+                    live=True, report_to_stdout=False, live_interval=0.2
+                )
+            )
+            # Let the first pass index the existing note, then add a new one.
+            await asyncio.sleep(0.3)
+            (self.source_dir / "late.md").write_text(
+                "# Late\n\nA note added while live mode is running."
+            )
+            # Give the poller time to catch the new file.
+            await asyncio.sleep(0.6)
+            run.cancel()
+            try:
+                await run
+            except asyncio.CancelledError:
+                pass
+
+        asyncio.run(drive())
+        self.assertGreater(
+            self._count_rows("file_path LIKE '%late.md'"),
+            0,
+            "live mode must index files created after startup",
+        )
+
     def test_abort_source_discards_uncommitted_rows(self):
         """Transaction safety (unit): abort_source must roll back rows a
         failed source emitted before they leak into a later source's commit.

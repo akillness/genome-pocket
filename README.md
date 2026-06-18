@@ -1,6 +1,6 @@
 # genome-pocket 🧬
 
-[![Build Status](https://github.com/username/genome-pocket/actions/workflows/ci.yml/badge.svg)](https://github.com/username/genome-pocket/actions)
+[![Build Status](https://github.com/akillness/genome-pocket/actions/workflows/ci.yml/badge.svg)](https://github.com/akillness/genome-pocket/actions)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python Version](https://img.shields.io/badge/python-3.12%2B-blue.svg)](https://www.python.org/downloads/)
 [![Self-contained engine](https://img.shields.io/badge/engine-self--contained-green.svg)](#-concept--architecture)
@@ -20,10 +20,10 @@ Sequence your knowledge. Carry the whole map in your pocket.
 Pocket operates on the core mental model of **Target = F(Source)**. All data processing is incremental ($\Delta$-only), ensuring that only modified files are reprocessed, and deleted files are automatically cleaned up from the database.
 
 ### Core Workflow — Source → Refine → Load → Serve
-1. **Source (LocalFS):** Watches a local directory (e.g., `./notes`) for Markdown/text files.
-2. **Refine (data cleaning):** `TextRefiner` normalizes raw content (Unicode NFC, CRLF→LF, trailing/duplicate whitespace, excess blank lines) while keeping an offset map so lineage still points at the original source bytes.
+1. **Source (LocalFS):** Watches a local directory (e.g., `./notes`) for Markdown/text files **and recognized source-code files** (`.py`, `.rs`, `.ts`/`.js`, `.go`, `.java`, ...).
+2. **Refine (data cleaning):** `TextRefiner` normalizes raw content (Unicode NFC, CRLF→LF, trailing/duplicate whitespace, excess blank lines) while keeping an offset map so lineage still points at the original source bytes. For code files it switches to an **indentation-preserving** pass so block structure (e.g. Python indentation) survives into the index.
 3. **Transformation (PocketIndex Pipeline):**
-   - Splits refined text into chunks using `RecursiveSplitter`.
+   - Splits refined text into chunks using `RecursiveSplitter`. The splitter is **code-aware**: `detect_code_language()` maps the filename to a language and the splitter prefers that language's structural boundaries (class/def/fn/...), falling back to a recursive paragraph→sentence→line→word→char split for prose. `SeparatorSplitter` and `CustomLanguageConfig` are available for custom formats.
    - Generates embeddings using a local `SentenceTransformer` model (`all-MiniLM-L6-v2`).
    - Generates stable, deterministic IDs using `IdGenerator` to ensure lineage and idempotency.
 4. **Load (SQLite + sqlite-vec + FTS5):** Stores chunk text, embeddings, and lineage metadata (file path, start/end offsets) in a local SQLite database. The same load mirrors chunk text into an FTS5 index so the target supports both vector and lexical (BM25) search.
@@ -31,6 +31,7 @@ Pocket operates on the core mental model of **Target = F(Source)**. All data pro
    - **CLI:** `pocket search "query" --mode hybrid|vector|lexical`
    - **MCP Server:** `pocket-mcp` for Claude Code / Cursor.
    - **REST API Server:** `pocket serve` / `pocket-api` (Starlette + uvicorn) with `/health`, `/search`, and `/lineage` endpoints.
+6. **Knowledge Graph (optional, GraphRAG):** An opt-in branch (`pocket update --graph`) extracts entities/relations into graph tables using a local extractor (`deterministic` default, or `ollama`/`airllm`), reusing the same incremental lineage/memoization/deletion sweep. Query a neighborhood with `pocket graph "<entity>"`.
 
 ---
 
@@ -51,14 +52,14 @@ genome-pocket/
 ├── pocketindex/              # Self-contained ETL engine (vendored, no pip dep)
 │   ├── __init__.py           # App, lifespan, fn, map, mount_each, context
 │   ├── connectors/           # localfs source + sqlite target (lineage/memo + FTS5)
-│   ├── ops/                  # sentence_transformers embedder, text splitter, refiner
+│   ├── ops/                  # embedder, splitter, refiner + graph extract/entity_resolution ops
 │   └── resources/            # file, chunk, deterministic id helpers
 ├── pocket/                   # Application source code
 │   ├── __init__.py
-│   ├── cli.py                # CLI commands (init, update, search)
+│   ├── cli.py                # CLI commands (init, update, search, graph)
 │   ├── config.py             # Configuration & environment variables
 │   ├── mcp_server.py         # MCP server interface
-│   ├── pipeline.py           # ETL pipeline wiring (Source→Refine→Load)
+│   ├── pipeline.py           # ETL pipeline wiring (Source→Refine→Load + graph)
 │   ├── retrieval.py          # Hybrid retrieval (vector + lexical + RRF), shared by CLI/MCP/API
 │   └── api_server.py         # REST API server (Starlette + uvicorn)
 ├── .env                      # Environment configuration
@@ -78,7 +79,7 @@ genome-pocket/
 ### 2. Installation
 Clone the repository and install in editable mode:
 ```bash
-git clone https://github.com/username/genome-pocket.git
+git clone https://github.com/akillness/genome-pocket.git
 cd genome-pocket
 uv venv
 source .venv/bin/activate
@@ -91,6 +92,13 @@ Create a `.env` file in the root directory:
 POCKET_SOURCE_DIR=./notes
 POCKET_SQLITE_DB=./.pocket/pocket_data.db
 EMBEDDING_MODEL=all-MiniLM-L6-v2
+
+# --- Optional: knowledge-graph branch (GraphRAG, POCKET-404) ---
+# Off by default; the pipeline is exactly the vector/lexical path until enabled.
+POCKET_GRAPH=0                      # or pass `pocket update --graph` per-run
+POCKET_LLM_PROVIDER=deterministic   # deterministic (offline) | ollama | airllm
+# POCKET_LLM_MODEL=                  # backend-specific model id (optional)
+POCKET_GRAPH_MIN_CONFIDENCE=0.0     # facts below this are staged for HITL review
 ```
 
 
@@ -107,9 +115,20 @@ Run in catch-up mode (processes all pending changes and exits):
 pocket update
 ```
 
-Run in live mode (watches for file changes in real-time):
+Run in live mode (watches for file changes in real-time, re-indexing on a polling interval):
 ```bash
-pocket update -L
+pocket update -L                  # poll every 2s (default)
+pocket update -L --interval 5     # poll every 5s
+```
+
+Every pass prints per-component processing statistics (adds / reprocesses /
+unchanged / deletes / errors) so you can monitor and cross-check what the
+incremental engine actually did against your logs:
+
+```text
+[pocketindex] run complete in 0.23s
+  process_file: adds=1 reprocesses=0 unchanged=1 deletes=0 errors=0 in_progress=0
+  total: adds=1 reprocesses=0 unchanged=1 deletes=0 errors=0 in_progress=0
 ```
 
 #### Search the Knowledge Base
@@ -117,6 +136,32 @@ pocket update -L
 pocket search "What is Pocket?"               # hybrid (vector + lexical) by default
 pocket search "vec_distance_cosine" --mode lexical   # exact keyword / symbol match
 pocket search "how does incremental sync work" --mode vector
+```
+
+#### Build & Query the Knowledge Graph (optional, GraphRAG)
+The graph branch is **opt-in**. When enabled, the same incremental pass extracts
+entities and relations from your notes into graph tables (subject to the same
+lineage/memoization/deletion sweep as chunks), using a local extractor selected
+by `POCKET_LLM_PROVIDER`:
+- `deterministic` (default) — pure, offline, no model/network/dependency.
+- `ollama` — local Ollama daemon over stdlib HTTP.
+- `airllm` — local in-process [airLLM](https://github.com/lyogavin/airllm) inference
+  (layer-sharded HuggingFace weights; install the optional extra: `uv pip install -e '.[airllm]'`).
+
+```bash
+pocket update --graph                          # extract entities/relations alongside chunks
+POCKET_LLM_PROVIDER=ollama pocket update --graph   # use a local Ollama model instead
+pocket graph "Pocket"                          # print an entity's neighborhood (relations)
+pocket graph "Pocket" --limit 20               # cap the number of relations shown
+```
+
+#### Inspect & Manage the Index
+```bash
+pocket ls                                      # list indexed sources + chunk counts
+pocket show                                    # summarize the index (sources/chunks/FTS)
+pocket show notes/welcome.md                   # show one source's chunk lineage
+pocket drop notes/welcome.md --yes             # evict one source's chunks + lineage
+pocket drop --yes                              # reset the entire index (rebuild on next update)
 ```
 
 #### Serve the REST API

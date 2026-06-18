@@ -238,8 +238,12 @@ class TableTarget:
             )
         self.conn.commit()
 
-    def sweep(self, live_source_keys: set) -> None:
-        """Remove all target rows whose source items no longer exist."""
+    def sweep(self, live_source_keys: set) -> int:
+        """Remove all target rows whose source items no longer exist.
+
+        Returns the number of source items swept (deleted) so the engine can
+        report deletion counts in its run statistics.
+        """
         cur = self.conn.execute(
             f"SELECT DISTINCT source_key FROM {self._lineage_table}"
         )
@@ -256,6 +260,7 @@ class TableTarget:
                 (source_key,),
             )
         self.conn.commit()
+        return len(removed)
 
     def declare_row(self, row: Any) -> None:
         # Upsert the row into the table

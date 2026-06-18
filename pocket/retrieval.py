@@ -236,3 +236,204 @@ def get_lineage(file_path: str, db_path: Optional[Path] = None) -> List[Dict]:
         }
         for cid, start, end, text in rows
     ]
+def list_sources(db_path: Optional[Path] = None) -> List[Dict]:
+    """Return one row per indexed source file with its chunk count and offsets.
+
+    This powers ``pocket ls`` — an inventory of the stable source paths the
+    target currently materializes, derived from the same lineage the engine
+    uses for incremental reconciliation.
+    """
+    db_path = db_path or config.POCKET_SQLITE_DB
+    if not Path(db_path).exists():
+        return []
+    conn = sqlite3.connect(str(db_path))
+    try:
+        cur = conn.execute(
+            """
+            SELECT file_path,
+                   COUNT(*)        AS chunks,
+                   MIN(start_offset) AS first_offset,
+                   MAX(end_offset)   AS last_offset
+            FROM embeddings
+            GROUP BY file_path
+            ORDER BY file_path ASC
+            """
+        )
+        rows = cur.fetchall()
+    finally:
+        conn.close()
+    return [
+        {
+            "file_path": fp,
+            "chunks": chunks,
+            "first_offset": first,
+            "last_offset": last,
+        }
+        for fp, chunks, first, last in rows
+    ]
+
+
+def target_stats(db_path: Optional[Path] = None) -> Dict:
+    """Return aggregate counts describing the materialized target state.
+
+    Used by ``pocket show`` to report what the database holds without running
+    the pipeline: number of source files, total chunks, and whether the
+    lexical (FTS5) companion index is present.
+    """
+    db_path = db_path or config.POCKET_SQLITE_DB
+    if not Path(db_path).exists():
+        return {"exists": False, "sources": 0, "chunks": 0, "fts_enabled": False}
+    conn = sqlite3.connect(str(db_path))
+    try:
+        chunks = conn.execute("SELECT COUNT(*) FROM embeddings").fetchone()[0]
+        sources = conn.execute(
+            "SELECT COUNT(DISTINCT file_path) FROM embeddings"
+        ).fetchone()[0]
+        fts_enabled = (
+            conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
+                (_FTS_TABLE,),
+            ).fetchone()
+            is not None
+        )
+    finally:
+        conn.close()
+    return {
+        "exists": True,
+        "sources": sources,
+        "chunks": chunks,
+        "fts_enabled": fts_enabled,
+    }
+
+
+def _graph_available(conn: sqlite3.Connection) -> bool:
+    return (
+        conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='entities'"
+        ).fetchone()
+        is not None
+    )
+
+
+def graph_neighborhood(
+    entity: str,
+    limit: int = 10,
+    db_path: Optional[Path] = None,
+    model_name: Optional[str] = None,
+) -> Dict:
+    """Return a knowledge-graph node's 1-hop neighborhood (POCKET-404d).
+
+    Resolves ``entity`` to the nearest node by name (exact/alias match first,
+    then vector similarity over entity-name embeddings) and returns it with the
+    relations it participates in, each resolved to the neighbor's name. Every
+    edge keeps its evidence span and source file so a caller can cite it.
+    """
+    db_path = db_path or config.POCKET_SQLITE_DB
+    model_name = model_name or config.EMBEDDING_MODEL
+    if not Path(db_path).exists():
+        return {}
+    conn = _connect(Path(db_path))
+    try:
+        if not _graph_available(conn):
+            return {}
+        # 1. Exact / alias match.
+        row = conn.execute(
+            "SELECT id, name, type, aliases, confidence, source_file "
+            "FROM entities WHERE lower(name) = lower(?) LIMIT 1",
+            (entity,),
+        ).fetchone()
+        # 2. Fall back to nearest by name embedding.
+        if row is None:
+            model = _get_model(model_name)
+            qv = sqlite_vec.serialize_float32(
+                model.encode(entity, normalize_embeddings=True)
+            )
+            row = conn.execute(
+                "SELECT id, name, type, aliases, confidence, source_file, "
+                "vec_distance_cosine(embedding, ?) AS d "
+                "FROM entities ORDER BY d ASC LIMIT 1",
+                (qv,),
+            ).fetchone()
+        if row is None:
+            return {}
+        node_id, name, etype, aliases, confidence, source_file = row[:6]
+        edges = conn.execute(
+            """
+            SELECT r.predicate, r.object_id, r.subject_id, r.evidence,
+                   r.confidence, r.source_file,
+                   so.name AS subject_name, ob.name AS object_name
+            FROM relations r
+            LEFT JOIN entities so ON so.id = r.subject_id
+            LEFT JOIN entities ob ON ob.id = r.object_id
+            WHERE r.subject_id = ? OR r.object_id = ?
+            ORDER BY r.confidence DESC
+            LIMIT ?
+            """,
+            (node_id, node_id, limit),
+        ).fetchall()
+    finally:
+        conn.close()
+
+    neighbors = []
+    for (
+        predicate,
+        object_id,
+        subject_id,
+        evidence,
+        edge_conf,
+        edge_src,
+        subject_name,
+        object_name,
+    ) in edges:
+        outgoing = subject_id == node_id
+        neighbors.append(
+            {
+                "direction": "out" if outgoing else "in",
+                "predicate": predicate,
+                "neighbor": object_name if outgoing else subject_name,
+                "evidence": evidence,
+                "confidence": edge_conf,
+                "source_file": edge_src,
+            }
+        )
+    return {
+        "id": node_id,
+        "name": name,
+        "type": etype,
+        "aliases": aliases,
+        "confidence": confidence,
+        "source_file": source_file,
+        "neighbors": neighbors,
+    }
+
+
+def format_neighborhood(node: Dict) -> str:
+    """Render a graph neighborhood for the CLI / MCP."""
+    if not node:
+        return "No matching entity found in the graph."
+    import json as _json
+
+    aliases = node.get("aliases")
+    try:
+        alias_list = _json.loads(aliases) if aliases else []
+    except (ValueError, TypeError):
+        alias_list = []
+    lines = [
+        f"Entity: {node['name']} ({node['type']}) "
+        f"[confidence {node.get('confidence', 0):.2f}]",
+        f"Source: {node.get('source_file', '?')}",
+    ]
+    if alias_list:
+        lines.append(f"Aliases: {', '.join(alias_list)}")
+    neighbors = node.get("neighbors", [])
+    if not neighbors:
+        lines.append("(no relations)")
+    else:
+        lines.append(f"Relations ({len(neighbors)}):")
+        for n in neighbors:
+            arrow = "->" if n["direction"] == "out" else "<-"
+            lines.append(
+                f"  {arrow} {n['predicate']} {arrow} {n['neighbor']} "
+                f"[{n.get('confidence', 0):.2f}]"
+            )
+    return "\n".join(lines)

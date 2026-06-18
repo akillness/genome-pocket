@@ -320,5 +320,177 @@ class TestCodeAwareSplitting(unittest.TestCase):
         self.assertEqual(doc.text, "a = 1")
 
 
+class TestLifecycleCommands(unittest.TestCase):
+    """POCKET-405: ls / show / drop lifecycle commands."""
+
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.source_dir = pathlib.Path(self.temp_dir.name) / "notes"
+        self.source_dir.mkdir()
+        self.db_path = pathlib.Path(self.temp_dir.name) / "pocket_data.db"
+
+        self.old_db_env = os.environ.get("POCKET_SQLITE_DB")
+        os.environ["POCKET_SQLITE_DB"] = str(self.db_path)
+        if "pocket.config" in sys.modules:
+            importlib.reload(sys.modules["pocket.config"])
+        for mod in ("pocket.retrieval", "pocket.admin"):
+            if mod in sys.modules:
+                importlib.reload(sys.modules[mod])
+
+        (self.source_dir / "alpha.md").write_text(
+            "# Alpha\n\nThe alpha note about vectors and search.\n"
+        )
+        (self.source_dir / "beta.md").write_text(
+            "# Beta\n\nThe beta note about lineage and deletion.\n"
+        )
+
+    def tearDown(self):
+        if self.old_db_env is not None:
+            os.environ["POCKET_SQLITE_DB"] = self.old_db_env
+        else:
+            os.environ.pop("POCKET_SQLITE_DB", None)
+        if "pocket.config" in sys.modules:
+            importlib.reload(sys.modules["pocket.config"])
+        self.temp_dir.cleanup()
+
+    def _run(self):
+        from pocket.pipeline import app_main
+        app = pix.App(
+            "pocket_test",
+            app_main,
+            sourcedir=self.source_dir,
+            db_path=self.db_path,
+        )
+        app.update_blocking(live=False, report_to_stdout=False)
+
+    def _count(self, where=""):
+        conn = sqlite3.connect(str(self.db_path))
+        try:
+            sql = "SELECT COUNT(*) FROM embeddings" + (
+                f" WHERE {where}" if where else ""
+            )
+            return conn.execute(sql).fetchone()[0]
+        finally:
+            conn.close()
+
+    def test_list_sources_reports_each_file(self):
+        from pocket import retrieval
+        importlib.reload(retrieval)
+        self._run()
+        sources = retrieval.list_sources(db_path=self.db_path)
+        paths = [s["file_path"] for s in sources]
+        self.assertEqual(len(sources), 2)
+        self.assertTrue(any(p.endswith("alpha.md") for p in paths))
+        self.assertTrue(any(p.endswith("beta.md") for p in paths))
+        for s in sources:
+            self.assertGreater(s["chunks"], 0)
+            self.assertGreaterEqual(s["first_offset"], 0)
+
+    def test_target_stats_summarizes_index(self):
+        from pocket import retrieval
+        importlib.reload(retrieval)
+        # Before any run the DB does not exist yet.
+        empty = retrieval.target_stats(db_path=self.db_path)
+        self.assertFalse(empty["exists"])
+        self._run()
+        stats = retrieval.target_stats(db_path=self.db_path)
+        self.assertTrue(stats["exists"])
+        self.assertEqual(stats["sources"], 2)
+        self.assertGreater(stats["chunks"], 0)
+        self.assertTrue(stats["fts_enabled"])
+
+    def test_drop_source_removes_only_that_file(self):
+        from pocket import admin
+        importlib.reload(admin)
+        self._run()
+        conn = sqlite3.connect(str(self.db_path))
+        beta_path = conn.execute(
+            "SELECT file_path FROM embeddings WHERE file_path LIKE '%beta.md' "
+            "LIMIT 1"
+        ).fetchone()[0]
+        conn.close()
+
+        result = admin.drop_source(beta_path, db_path=self.db_path)
+        self.assertGreater(result["removed"], 0)
+        self.assertEqual(self._count("file_path LIKE '%beta.md'"), 0)
+        self.assertGreater(self._count("file_path LIKE '%alpha.md'"), 0)
+        # FTS mirror is kept in lockstep.
+        conn = sqlite3.connect(str(self.db_path))
+        try:
+            n_main = conn.execute("SELECT COUNT(*) FROM embeddings").fetchone()[0]
+            n_fts = conn.execute(
+                "SELECT COUNT(*) FROM _pocket_fts_embeddings"
+            ).fetchone()[0]
+            self.assertEqual(n_main, n_fts)
+            # The dropped source's memo fingerprint is forgotten so a later
+            # update re-adds it instead of memo-skipping it.
+            memo = conn.execute(
+                "SELECT COUNT(*) FROM _pocket_memo_embeddings"
+            ).fetchone()[0]
+            self.assertEqual(memo, 1)
+        finally:
+            conn.close()
+
+    def test_dropped_source_is_reindexed_on_next_update(self):
+        from pocket import admin
+        importlib.reload(admin)
+        self._run()
+        conn = sqlite3.connect(str(self.db_path))
+        beta_path = conn.execute(
+            "SELECT file_path FROM embeddings WHERE file_path LIKE '%beta.md' "
+            "LIMIT 1"
+        ).fetchone()[0]
+        conn.close()
+        admin.drop_source(beta_path, db_path=self.db_path)
+        self.assertEqual(self._count("file_path LIKE '%beta.md'"), 0)
+        # Re-running must bring the dropped source back (memo was cleared).
+        self._run()
+        self.assertGreater(self._count("file_path LIKE '%beta.md'"), 0)
+
+    def test_drop_target_resets_everything(self):
+        from pocket import admin
+        importlib.reload(admin)
+        self._run()
+        result = admin.drop_target(db_path=self.db_path)
+        self.assertTrue(result["existed"])
+        self.assertEqual(result["sources"], 2)
+        self.assertGreater(result["chunks"], 0)
+        self.assertIn("embeddings", result["dropped"])
+        conn = sqlite3.connect(str(self.db_path))
+        try:
+            remaining = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' "
+                "AND name='embeddings'"
+            ).fetchone()
+            self.assertIsNone(remaining, "embeddings table must be dropped")
+        finally:
+            conn.close()
+        # A fresh update rebuilds the whole index from scratch.
+        self._run()
+        self.assertEqual(self._count(), self._count())
+        self.assertGreater(self._count(), 0)
+
+    def test_cli_commands_run(self):
+        import pocket.cli as cli_module
+        importlib.reload(cli_module)
+        from click.testing import CliRunner
+        cli = cli_module.cli
+        self._run()
+        runner = CliRunner()
+
+        res = runner.invoke(cli, ["ls"])
+        self.assertEqual(res.exit_code, 0, res.output)
+        self.assertIn("alpha.md", res.output)
+        self.assertIn("source(s) indexed", res.output)
+
+        res = runner.invoke(cli, ["show"])
+        self.assertEqual(res.exit_code, 0, res.output)
+        self.assertIn("Sources:", res.output)
+
+        res = runner.invoke(cli, ["drop", "--yes"])
+        self.assertEqual(res.exit_code, 0, res.output)
+        self.assertIn("Dropped", res.output)
+
+
 if __name__ == "__main__":
     unittest.main()

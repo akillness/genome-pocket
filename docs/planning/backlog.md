@@ -80,6 +80,6 @@ isolated venv and diffing its public API against `pocketindex`.
 - [ ] **POCKET-404: LLM & Entity-Resolution Ops**
   - *Gap:* upstream offers `ops.litellm` (LLM extraction) and `ops.entity_resolution` (faiss-backed dedup); pocketindex has neither.
   - *Tasks:* add an optional LLM extraction op and an entity-resolution op to feed the planned graph target.
-- [ ] **POCKET-405: `show` / `drop` / `ls` Lifecycle Commands**
-  - *Gap:* upstream CLI has `show`, `drop`, `ls` for inspecting stable paths and dropping target state; pocket only has `init`/`update`/`search`/`serve`.
-  - *Tasks:* add `pocket show` (lineage/stable paths) and `pocket drop` (reset target state).
+- [x] **POCKET-405: `show` / `drop` / `ls` Lifecycle Commands** *(done)*
+  - *Gap:* upstream CLI has `show`, `drop`, `ls` for inspecting stable paths and dropping target state; pocket only had `init`/`update`/`search`/`serve`.
+  - *Delivered:* `pocket ls` (per-source chunk counts + offset spans), `pocket show [PATH]` (index summary or per-source chunk lineage), and `pocket drop [PATH] [--yes]` (full-index reset or single-source eviction of chunks + FTS mirror + lineage/memo). Read helpers `retrieval.list_sources`/`retrieval.target_stats`; write-side `pocket/admin.py` (`drop_target`/`drop_source`). Tests: `TestLifecycleCommands` (6).

@@ -94,5 +94,96 @@ def serve(host, port):
     uvicorn.run(create_app(), host=host, port=port)
 
 
+@cli.command(name="ls")
+def ls_cmd():
+    """List indexed source files (stable paths) with their chunk counts."""
+    from pocket import retrieval
+
+    if not POCKET_SQLITE_DB.exists():
+        click.echo("Database does not exist. Please run 'pocket update' first.")
+        return
+    sources = retrieval.list_sources()
+    if not sources:
+        click.echo("No indexed sources found.")
+        return
+    click.echo(f"{'CHUNKS':>7}  {'OFFSETS':>15}  SOURCE")
+    for s in sources:
+        offsets = f"{s['first_offset']}-{s['last_offset']}"
+        click.echo(f"{s['chunks']:>7}  {offsets:>15}  {s['file_path']}")
+    click.echo(f"\n{len(sources)} source(s) indexed.")
+
+
+@cli.command()
+@click.argument("file_path", required=False)
+def show(file_path):
+    """Show target state. With no argument, summarize the whole index; with a
+    FILE_PATH, show that source's chunk lineage (ids and offsets)."""
+    from pocket import retrieval
+
+    if not POCKET_SQLITE_DB.exists():
+        click.echo("Database does not exist. Please run 'pocket update' first.")
+        return
+
+    if file_path is None:
+        stats = retrieval.target_stats()
+        click.echo(f"Database:     {POCKET_SQLITE_DB}")
+        click.echo(f"Sources:      {stats['sources']}")
+        click.echo(f"Chunks:       {stats['chunks']}")
+        click.echo(
+            f"Lexical (FTS): {'enabled' if stats['fts_enabled'] else 'disabled'}"
+        )
+        return
+
+    lineage = retrieval.get_lineage(file_path)
+    if not lineage:
+        click.echo(f"No chunks found for source: {file_path}")
+        return
+    click.echo(f"Lineage for {file_path} ({len(lineage)} chunk(s)):")
+    for idx, c in enumerate(lineage, 1):
+        click.echo(
+            f"  Chunk {idx} [id={c['chunk_id']}] "
+            f"chars {c['start_offset']}-{c['end_offset']}: {c['snippet']}"
+        )
+
+
+@cli.command()
+@click.argument("file_path", required=False)
+@click.option(
+    "--yes", is_flag=True, help="Skip the confirmation prompt."
+)
+def drop(file_path, yes):
+    """Drop materialized target state. With no argument, reset the entire
+    index; with a FILE_PATH, evict only that source's chunks and lineage."""
+    from pocket import admin
+
+    if not POCKET_SQLITE_DB.exists():
+        click.echo("Database does not exist. Nothing to drop.")
+        return
+
+    if file_path is not None:
+        if not yes and not click.confirm(
+            f"Drop all chunks for source '{file_path}'?"
+        ):
+            click.echo("Aborted.")
+            return
+        result = admin.drop_source(file_path)
+        click.echo(f"Removed {result['removed']} chunk(s) for {file_path}.")
+        return
+
+    if not yes and not click.confirm(
+        "Drop the ENTIRE index (all sources and lineage)?"
+    ):
+        click.echo("Aborted.")
+        return
+    result = admin.drop_target()
+    if not result["existed"]:
+        click.echo("Index was already empty.")
+        return
+    click.echo(
+        f"Dropped {result['chunks']} chunk(s) across {result['sources']} "
+        f"source(s). Tables removed: {', '.join(result['dropped'])}."
+    )
+
+
 if __name__ == "__main__":
     cli()

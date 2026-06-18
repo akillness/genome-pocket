@@ -128,7 +128,16 @@ incremental engine actually did against your logs:
 pocket search "What is Pocket?"               # hybrid (vector + lexical) by default
 pocket search "vec_distance_cosine" --mode lexical   # exact keyword / symbol match
 pocket search "how does incremental sync work" --mode vector
-```
+
+
+#### Inspect & Manage the Index
+bash
+pocket ls                                      # list indexed sources + chunk counts
+pocket show                                    # summarize the index (sources/chunks/FTS)
+pocket show notes/welcome.md                   # show one source's chunk lineage
+pocket drop notes/welcome.md --yes             # evict one source's chunks + lineage
+pocket drop --yes                              # reset the entire index (rebuild on next update)
+
 
 #### Serve the REST API
 ```bash

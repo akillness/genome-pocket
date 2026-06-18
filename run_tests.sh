@@ -21,4 +21,6 @@ echo "Running text refiner unit tests..."
 uv run python -m unittest tests.test_retrieval_api.TestTextRefiner
 echo "Running code-aware splitting tests (POCKET-403)..."
 uv run python -m unittest tests.test_retrieval_api.TestCodeAwareSplitting
+echo "Running lifecycle command tests (POCKET-405)..."
+uv run python -m unittest tests.test_retrieval_api.TestLifecycleCommands
 echo "All tests passed successfully!"

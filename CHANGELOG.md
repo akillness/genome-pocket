@@ -31,6 +31,15 @@ vendored `pocketindex` engine.
   backward-compatible. The `localfs` source connector now indexes recognized
   source-code files (`.py`, `.rs`, `.ts`/`.js`, `.go`, `.java`, ...) and the
   pipeline detects language by filename to route code vs. prose.
+- **Lifecycle commands `ls` / `show` / `drop` (POCKET-405).** New CLI verbs that
+  inspect and reset target state without re-running the pipeline: `pocket ls`
+  lists indexed source files with chunk counts and offset spans; `pocket show`
+  summarizes the whole index (sources / chunks / FTS status) or, given a path,
+  prints that source's chunk lineage; `pocket drop [PATH] [--yes]` resets the
+  entire index or evicts a single source's chunks, FTS mirror, and lineage/memo
+  state (clearing the memo so a later `update` re-adds it). Backed by new
+  read helpers `retrieval.list_sources` / `retrieval.target_stats` and a
+  write-side `pocket/admin.py` (`drop_target` / `drop_source`).
 
 ### Changed
 - **Indentation-preserving refine path.** `TextRefiner.refine(text, code=True)`
@@ -46,5 +55,6 @@ vendored `pocketindex` engine.
 ### Tests
 - Added `TestCodeAwareSplitting` (8 cases) and the integration test
   `test_code_file_lineage_and_boundaries`, plus `test_run_reports_stats` and
-  `test_live_mode_picks_up_new_file`. Full suite (21 tests) passes via
-  `bash run_tests.sh`.
+  `test_live_mode_picks_up_new_file`, and `TestLifecycleCommands` (6 cases)
+  covering `ls`/`show`/`drop`, single-source eviction + re-index, and the CLI
+  surface. Full suite (27 tests) passes via `bash run_tests.sh`.

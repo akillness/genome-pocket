@@ -236,3 +236,71 @@ def get_lineage(file_path: str, db_path: Optional[Path] = None) -> List[Dict]:
         }
         for cid, start, end, text in rows
     ]
+def list_sources(db_path: Optional[Path] = None) -> List[Dict]:
+    """Return one row per indexed source file with its chunk count and offsets.
+
+    This powers ``pocket ls`` — an inventory of the stable source paths the
+    target currently materializes, derived from the same lineage the engine
+    uses for incremental reconciliation.
+    """
+    db_path = db_path or config.POCKET_SQLITE_DB
+    if not Path(db_path).exists():
+        return []
+    conn = sqlite3.connect(str(db_path))
+    try:
+        cur = conn.execute(
+            """
+            SELECT file_path,
+                   COUNT(*)        AS chunks,
+                   MIN(start_offset) AS first_offset,
+                   MAX(end_offset)   AS last_offset
+            FROM embeddings
+            GROUP BY file_path
+            ORDER BY file_path ASC
+            """
+        )
+        rows = cur.fetchall()
+    finally:
+        conn.close()
+    return [
+        {
+            "file_path": fp,
+            "chunks": chunks,
+            "first_offset": first,
+            "last_offset": last,
+        }
+        for fp, chunks, first, last in rows
+    ]
+
+
+def target_stats(db_path: Optional[Path] = None) -> Dict:
+    """Return aggregate counts describing the materialized target state.
+
+    Used by ``pocket show`` to report what the database holds without running
+    the pipeline: number of source files, total chunks, and whether the
+    lexical (FTS5) companion index is present.
+    """
+    db_path = db_path or config.POCKET_SQLITE_DB
+    if not Path(db_path).exists():
+        return {"exists": False, "sources": 0, "chunks": 0, "fts_enabled": False}
+    conn = sqlite3.connect(str(db_path))
+    try:
+        chunks = conn.execute("SELECT COUNT(*) FROM embeddings").fetchone()[0]
+        sources = conn.execute(
+            "SELECT COUNT(DISTINCT file_path) FROM embeddings"
+        ).fetchone()[0]
+        fts_enabled = (
+            conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
+                (_FTS_TABLE,),
+            ).fetchone()
+            is not None
+        )
+    finally:
+        conn.close()
+    return {
+        "exists": True,
+        "sources": sources,
+        "chunks": chunks,
+        "fts_enabled": fts_enabled,
+    }

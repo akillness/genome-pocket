@@ -1,10 +1,24 @@
+import os
 import click
 import pathlib
 
 import pocketindex as pix
 from pocket.config import POCKET_SOURCE_DIR, POCKET_SQLITE_DB, EMBEDDING_MODEL
-from pocket.pipeline import app_main
 from pocket import retrieval
+
+
+def _get_app_main():
+    """Return the pipeline main function.
+
+    Set ``POCKET_PIPELINE=coco`` to use the Phase-4 PoC that runs real
+    cocoindex ops (RecursiveSplitter, SentenceTransformerEmbedder) while
+    keeping the pocketindex engine.  Default is the standard pipeline.
+    """
+    if os.environ.get("POCKET_PIPELINE", "").lower() == "coco":
+        from pocket.pipeline_coco import app_main as _main
+        return _main
+    from pocket.pipeline import app_main as _main
+    return _main
 
 @click.group()
 def cli():
@@ -47,7 +61,7 @@ def update(live, interval, graph):
     # Create the app using the default environment (which has the lifespan registered)
     app = pix.App(
         "pocket",
-        app_main,
+        _get_app_main(),
         sourcedir=POCKET_SOURCE_DIR,
         db_path=POCKET_SQLITE_DB,
         graph=graph,

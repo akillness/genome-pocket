@@ -11,4 +11,8 @@ echo "Running deletion propagation test (DoD #4)..."
 uv run python -m unittest tests.test_pipeline.TestPocketPipeline.test_deletion_propagates
 echo "Running transaction rollback test (abort_source)..."
 uv run python -m unittest tests.test_pipeline.TestPocketPipeline.test_abort_source_discards_uncommitted_rows
+echo "Running hybrid retrieval + REST API tests..."
+uv run python -m unittest tests.test_retrieval_api.TestRetrievalAndApi
+echo "Running text refiner unit tests..."
+uv run python -m unittest tests.test_retrieval_api.TestTextRefiner
 echo "All tests passed successfully!"

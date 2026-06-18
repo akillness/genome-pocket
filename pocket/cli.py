@@ -1,12 +1,10 @@
 import click
 import pathlib
-import sqlite3
-import sqlite_vec
-from sentence_transformers import SentenceTransformer
 
-import cocoindex as coco
+import pocketindex as pix
 from pocket.config import POCKET_SOURCE_DIR, POCKET_SQLITE_DB, EMBEDDING_MODEL
 from pocket.pipeline import app_main
+from pocket import retrieval
 
 @click.group()
 def cli():
@@ -35,7 +33,7 @@ def update(live):
     click.echo(f"Starting indexing pipeline (live={live})...")
     
     # Create the app using the default environment (which has the lifespan registered)
-    app = coco.App(
+    app = pix.App(
         "pocket",
         app_main,
         sourcedir=POCKET_SOURCE_DIR,
@@ -49,43 +47,35 @@ def update(live):
 @cli.command()
 @click.argument("query")
 @click.option("--limit", default=5, help="Number of results to return")
-def search(query, limit):
-    """Search the indexed notes using semantic vector search."""
-    click.echo(f"Searching for: '{query}'...")
-    
-    # Embed the query
-    model = SentenceTransformer(EMBEDDING_MODEL)
-    query_embedding = model.encode(query, normalize_embeddings=True)
-    query_vector = sqlite_vec.serialize_float32(query_embedding)
-    
-    # Connect to the database
+@click.option(
+    "--mode",
+    type=click.Choice(["hybrid", "vector", "lexical"]),
+    default="hybrid",
+    help="Retrieval strategy: hybrid (vector+lexical RRF), vector, or lexical.",
+)
+def search(query, limit, mode):
+    """Search the indexed notes using hybrid (vector + lexical) retrieval."""
+    click.echo(f"Searching for: '{query}' (mode={mode})...")
+
     if not POCKET_SQLITE_DB.exists():
         click.echo("Database does not exist. Please run 'pocket update' first.")
         return
-        
-    conn = sqlite3.connect(str(POCKET_SQLITE_DB))
-    conn.enable_load_extension(True)
-    sqlite_vec.load(conn)
-    conn.enable_load_extension(False)
-    
-    cursor = conn.execute("""
-        SELECT file_path, text, start_offset, end_offset, vec_distance_cosine(embedding, ?) AS distance
-        FROM embeddings
-        ORDER BY distance ASC
-        LIMIT ?
-    """, (query_vector, limit))
-    
-    rows = cursor.fetchall()
-    if not rows:
-        click.echo("No results found.")
-        return
-        
-    for idx, (file_path, text, start_offset, end_offset, distance) in enumerate(rows, 1):
-        similarity = 1.0 - distance
-        click.echo(f"\n[{idx}] File: {file_path} (chars {start_offset}-{end_offset}) [Similarity: {similarity:.4f}]")
-        click.echo("-" * 40)
-        click.echo(text.strip())
-        click.echo("-" * 40)
+
+    hits = retrieval.search(query, limit=limit, mode=mode)
+    click.echo(retrieval.format_hits(hits))
+
+
+@cli.command()
+@click.option("--host", default="127.0.0.1", help="Host to bind the API server to.")
+@click.option("--port", default=8000, type=int, help="Port to bind the API server to.")
+def serve(host, port):
+    """Serve the knowledge base over a REST API (Starlette + uvicorn)."""
+    import uvicorn
+    from pocket.api_server import create_app
+
+    click.echo(f"Starting Pocket API server on http://{host}:{port} ...")
+    uvicorn.run(create_app(), host=host, port=port)
+
 
 if __name__ == "__main__":
     cli()

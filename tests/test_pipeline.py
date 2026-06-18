@@ -3,7 +3,7 @@ import tempfile
 import pathlib
 import sqlite3
 import sqlite_vec
-import cocoindex as coco
+import pocketindex as pix
 import os
 import sys
 import importlib
@@ -42,7 +42,7 @@ class TestPocketPipeline(unittest.TestCase):
     def test_pipeline_and_search(self):
         from pocket.pipeline import app_main
         # Run the pipeline
-        app = coco.App(
+        app = pix.App(
             "pocket_test",
             app_main,
             sourcedir=self.source_dir,
@@ -77,7 +77,7 @@ class TestPocketPipeline(unittest.TestCase):
         from pocket.mcp_server import search_knowledge, get_file_lineage
         
         # Run the pipeline to populate the DB
-        app = coco.App(
+        app = pix.App(
             "pocket_test",
             app_main,
             sourcedir=self.source_dir,
@@ -103,7 +103,7 @@ class TestPocketPipeline(unittest.TestCase):
 
     def _run(self):
         from pocket.pipeline import app_main
-        app = coco.App(
+        app = pix.App(
             "pocket_test",
             app_main,
             sourcedir=self.source_dir,
@@ -134,7 +134,7 @@ class TestPocketPipeline(unittest.TestCase):
         async def counting(file, table):
             calls.append(str(file.file_path.path))
             return await original(file, table)
-        counting._coco_fn = True
+        counting._pix_fn = True
         counting._memo = True
         pipeline.process_file = counting
         try:
@@ -188,8 +188,8 @@ class TestPocketPipeline(unittest.TestCase):
         successful end_source commit; this test fails in that case.
         """
         from dataclasses import dataclass
-        from cocoindex.connectors import sqlite
-        import cocoindex as coco
+        from pocketindex.connectors import sqlite
+        import pocketindex as pix
 
         @dataclass
         class Row:
@@ -204,17 +204,17 @@ class TestPocketPipeline(unittest.TestCase):
                 target = sqlite.TableTarget(conn, "t", schema)
 
                 # Source A starts, emits a row, then "fails" before end_source.
-                tokA = coco._current_source_key.set("A")
+                tokA = pix._current_source_key.set("A")
                 target.begin_source("A")
                 target.declare_row(Row(id=1, val="from-A"))
-                coco._current_source_key.reset(tokA)
+                pix._current_source_key.reset(tokA)
                 target.abort_source("A")  # failure path
 
                 # Source B processes cleanly and commits.
-                tokB = coco._current_source_key.set("B")
+                tokB = pix._current_source_key.set("B")
                 target.begin_source("B")
                 target.declare_row(Row(id=2, val="from-B"))
-                coco._current_source_key.reset(tokB)
+                pix._current_source_key.reset(tokB)
                 target.end_source("B", "hashB")
 
                 ids = {r[0] for r in conn.execute("SELECT id FROM t").fetchall()}

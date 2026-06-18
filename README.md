@@ -8,7 +8,7 @@
 
 Sequence your knowledge. Carry the whole map in your pocket.
 
-**Pocket Knowledge Ops** is a local-first personal knowledge runtime powered by the **CocoIndex** declarative incremental ETL paradigm. It watches your local markdown notes, chunks them, generates vector embeddings using a local SentenceTransformer model, and stores them in a local SQLite database with `sqlite-vec` for semantic search.
+**Pocket Knowledge Ops** is a local-first personal knowledge runtime powered by the **PocketIndex** declarative incremental ETL paradigm (an in-tree vendored engine inspired by CocoIndex's Source→Refine→Load→Serve model). It watches your local markdown notes, chunks them, generates vector embeddings using a local SentenceTransformer model, and stores them in a local SQLite database with `sqlite-vec` for semantic search.
 
 ---
 
@@ -19,14 +19,18 @@ Sequence your knowledge. Carry the whole map in your pocket.
 
 Pocket operates on the core mental model of **Target = F(Source)**. All data processing is incremental ($\Delta$-only), ensuring that only modified files are reprocessed, and deleted files are automatically cleaned up from the database.
 
-### Core Workflow
+### Core Workflow — Source → Refine → Load → Serve
 1. **Source (LocalFS):** Watches a local directory (e.g., `./notes`) for Markdown/text files.
-2. **Transformation (CocoIndex Pipeline):**
-   - Splits text into chunks using `RecursiveSplitter`.
+2. **Refine (data cleaning):** `TextRefiner` normalizes raw content (Unicode NFC, CRLF→LF, trailing/duplicate whitespace, excess blank lines) while keeping an offset map so lineage still points at the original source bytes.
+3. **Transformation (PocketIndex Pipeline):**
+   - Splits refined text into chunks using `RecursiveSplitter`.
    - Generates embeddings using a local `SentenceTransformer` model (`all-MiniLM-L6-v2`).
    - Generates stable, deterministic IDs using `IdGenerator` to ensure lineage and idempotency.
-3. **Target (SQLite + sqlite-vec):** Stores chunk text, embeddings, and lineage metadata (file path, start/end offsets) in a local SQLite database.
-4. **Retrieval (MCP Server):** Exposes the retrieval layer as a Model Context Protocol (MCP) server, allowing AI coding agents (like Claude Code or Cursor) to query the knowledge base directly.
+4. **Load (SQLite + sqlite-vec + FTS5):** Stores chunk text, embeddings, and lineage metadata (file path, start/end offsets) in a local SQLite database. The same load mirrors chunk text into an FTS5 index so the target supports both vector and lexical (BM25) search.
+5. **Serve (hybrid retrieval):** A single retrieval layer (`pocket/retrieval.py`) fuses vector + lexical results via Reciprocal Rank Fusion and is exposed three ways:
+   - **CLI:** `pocket search "query" --mode hybrid|vector|lexical`
+   - **MCP Server:** `pocket-mcp` for Claude Code / Cursor.
+   - **REST API Server:** `pocket serve` / `pocket-api` (Starlette + uvicorn) with `/health`, `/search`, and `/lineage` endpoints.
 
 ---
 
@@ -44,17 +48,19 @@ genome-pocket/
 │   └── planning/             # Roadmap and sprint backlogs
 
 ├── notes/                    # Local markdown notes directory (source)
-├── cocoindex/                # Self-contained ETL engine (vendored, no pip dep)
+├── pocketindex/              # Self-contained ETL engine (vendored, no pip dep)
 │   ├── __init__.py           # App, lifespan, fn, map, mount_each, context
-│   ├── connectors/           # localfs source + sqlite target (lineage/memo)
-│   ├── ops/                  # sentence_transformers embedder + text splitter
+│   ├── connectors/           # localfs source + sqlite target (lineage/memo + FTS5)
+│   ├── ops/                  # sentence_transformers embedder, text splitter, refiner
 │   └── resources/            # file, chunk, deterministic id helpers
 ├── pocket/                   # Application source code
 │   ├── __init__.py
 │   ├── cli.py                # CLI commands (init, update, search)
 │   ├── config.py             # Configuration & environment variables
 │   ├── mcp_server.py         # MCP server interface
-│   └── pipeline.py           # ETL pipeline wiring (uses cocoindex engine)
+│   ├── pipeline.py           # ETL pipeline wiring (Source→Refine→Load)
+│   ├── retrieval.py          # Hybrid retrieval (vector + lexical + RRF), shared by CLI/MCP/API
+│   └── api_server.py         # REST API server (Starlette + uvicorn)
 ├── .env                      # Environment configuration
 ├── main.py                   # CLI entry point
 ├── pyproject.toml            # Project dependencies and scripts
@@ -81,10 +87,11 @@ uv pip install -e .
 
 ### 3. Configuration
 Create a `.env` file in the root directory:
-env
+```env
 POCKET_SOURCE_DIR=./notes
 POCKET_SQLITE_DB=./.pocket/pocket_data.db
 EMBEDDING_MODEL=all-MiniLM-L6-v2
+```
 
 
 ### 4. Usage
@@ -107,7 +114,26 @@ pocket update -L
 
 #### Search the Knowledge Base
 ```bash
-pocket search "What is Pocket?"
+pocket search "What is Pocket?"               # hybrid (vector + lexical) by default
+pocket search "vec_distance_cosine" --mode lexical   # exact keyword / symbol match
+pocket search "how does incremental sync work" --mode vector
+```
+
+#### Serve the REST API
+```bash
+pocket serve --host 127.0.0.1 --port 8000     # or: pocket-api
+```
+
+Endpoints:
+- `GET /health` — liveness and index status.
+- `GET /search?q=<query>&limit=5&mode=hybrid` — retrieval via query string.
+- `POST /search` — JSON body `{"query": "...", "limit": 5, "mode": "hybrid"}`.
+- `GET /lineage?file_path=<path>` — ordered chunk lineage for a source file.
+
+```bash
+curl "http://127.0.0.1:8000/search?q=pocket&mode=hybrid&limit=3"
+curl -X POST http://127.0.0.1:8000/search -H 'Content-Type: application/json' \
+     -d '{"query": "incremental sync", "mode": "vector"}'
 ```
 
 ---
@@ -128,6 +154,6 @@ To connect Claude Code or Cursor to your Pocket knowledge base, add the followin
 ```
 
 ### Exposed Tools
-- `search_knowledge(query: str, limit: int = 5)`: Search the personal knowledge base using semantic vector search.
+- `search_knowledge(query: str, limit: int = 5, mode: str = "hybrid")`: Search the personal knowledge base using hybrid (vector + lexical) retrieval; `mode` is `hybrid`, `vector`, or `lexical`.
 - `get_file_lineage(file_path: str)`: Retrieve the indexing history and lineage details for a specific source file.
 - `list_concepts(concept: str = None)`: List key concepts and relationships (Sprint 2).

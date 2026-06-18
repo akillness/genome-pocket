@@ -1,4 +1,4 @@
-"""Chunk resource for CocoIndex."""
+"""Chunk resource for PocketIndex."""
 from dataclasses import dataclass
 
 @dataclass

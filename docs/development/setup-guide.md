@@ -31,8 +31,8 @@ uv pip install -e .
 ### 3. Configure Environment Variables
 Create a `.env` file in the root directory:
 ```bash
-# Pocket internal database (stores CocoIndex state)
-COCOINDEX_DB=./.pocket/cocoindex.db
+# Pocket internal database (stores PocketIndex engine state)
+POCKET_SQLITE_DB=./.pocket/pocket_data.db
 
 # Local storage path for notes and documents
 POCKET_SOURCE_DIR=./notes

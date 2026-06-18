@@ -64,10 +64,10 @@
   <!-- Arrow 1 -> 2 -->
   <path d="M 230 260 L 290 260" fill="none" stroke="#4B5563" stroke-width="2" marker-end="url(#arrow)" />
 
-  <!-- 2. Transformation Layer (CocoIndex Pipeline) -->
+  <!-- 2. Transformation Layer (PocketIndex Pipeline) -->
   <g transform="translate(300, 100)" filter="url(#shadow)">
     <rect width="200" height="320" rx="12" fill="url(#grad-pipeline)" />
-    <text x="100" y="35" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-size="16" font-weight="bold" fill="#FFFFFF">2. CocoIndex ETL</text>
+    <text x="100" y="35" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-size="16" font-weight="bold" fill="#FFFFFF">2. PocketIndex ETL</text>
 
     <!-- Splitter -->
     <g transform="translate(20, 60)">

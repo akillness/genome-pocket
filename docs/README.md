@@ -22,7 +22,7 @@ docs/
 ├── development/
 │   ├── setup-guide.md         # Local Environment & Dependency Setup
 │   ├── api-spec.md            # API & Interface Specifications
-│   └── cocoindex-guide.md     # CocoIndex Integration & Best Practices
+│   └── pocketindex-guide.md   # PocketIndex Integration & Best Practices
 └── decisions/
     ├── adr-001-local-first.md # ADR 1: Local-First & Privacy Architecture
     └── adr-002-hybrid-db.md   # ADR 2: Vector + Graph Database Selection

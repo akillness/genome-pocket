@@ -21,8 +21,8 @@
 ### POCKET-101: Project Initialization & CLI Skeleton
 - **Objective:** Set up the Python project structure using `pyproject.toml` and configure dependencies.
 - **Deliverables:**
-  - `pyproject.toml` with `cocoindex`, `sqlite-vec` (or `lancedb`), `sentence-transformers`, and `click`/`typer` for CLI.
-  - `.env` file containing `COCOINDEX_DB=./.pocket/cocoindex.db`.
+  - `pyproject.toml` with `pocketindex`, `sqlite-vec` (or `lancedb`), `sentence-transformers`, and `click`/`typer` for CLI.
+  - `.env` file containing `POCKET_SQLITE_DB=./.pocket/pocket_data.db`.
   - `pocket/cli.py` with commands: `pocket init`, `pocket update`, and `pocket search`.
 
 ### POCKET-102: Local Filesystem Source Connector
@@ -45,13 +45,13 @@
         start_offset: int
         end_offset: int
     ```
-  - Database connection setup in `@coco.lifespan`.
+  - Database connection setup in `@pix.lifespan`.
   - Table target mounting using `sqlite.mount_table_target` or `lancedb.mount_table_target`.
 
 ### POCKET-104: Incremental Chunking & Embedding Pipeline
 - **Objective:** Implement the core transformation function that chunks files and generates embeddings.
 - **Deliverables:**
-  - `@coco.fn(memo=True)` decorated `process_file` function.
+  - `@pix.fn(memo=True)` decorated `process_file` function.
   - Use of `RecursiveSplitter` to split markdown text into chunks.
   - Use of `SentenceTransformerEmbedder` (e.g., `all-MiniLM-L6-v2`) to generate embeddings.
   - Deterministic ID generation using `IdGenerator` to ensure stable IDs across runs.

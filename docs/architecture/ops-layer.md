@@ -9,7 +9,7 @@ This document outlines the design of the **Ops Layer** in Pocket, focusing on sy
 To ensure complete explainability, Pocket tracks the execution of every pipeline component and retrieval query.
 
 ### 1. Component Tracing
-CocoIndex automatically tracks the execution history of all `@coco.fn` components. Pocket exposes this data to help developers diagnose pipeline failures:
+CocoIndex automatically tracks the execution history of all `@pix.fn` components. Pocket exposes this data to help developers diagnose pipeline failures:
 - **Execution Logs:** Track which files were processed, skipped (memoized), or failed.
 - **Dependency Graph:** Visualize the parent-child relationships between components (e.g., `process_file` -> `process_chunk`).
 

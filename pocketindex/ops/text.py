@@ -1,6 +1,6 @@
-"""Text splitting operations for CocoIndex."""
+"""Text splitting operations for PocketIndex."""
 from typing import List
-from cocoindex.resources.chunk import Chunk, Position
+from pocketindex.resources.chunk import Chunk, Position
 
 class RecursiveSplitter:
     def split(self, text: str, chunk_size: int = 1000, chunk_overlap: int = 200) -> List[Chunk]:

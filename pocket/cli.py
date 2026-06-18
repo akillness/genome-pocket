@@ -34,9 +34,15 @@ def init():
     type=float,
     help="Polling interval (seconds) between live-mode passes.",
 )
-def update(live, interval):
+@click.option(
+    "--graph",
+    is_flag=True,
+    help="Also extract a knowledge graph (entities/relations) from notes. "
+    "Opt-in; uses the local extractor selected by POCKET_LLM_PROVIDER.",
+)
+def update(live, interval, graph):
     """Run the indexing pipeline to process notes."""
-    click.echo(f"Starting indexing pipeline (live={live})...")
+    click.echo(f"Starting indexing pipeline (live={live}, graph={graph})...")
 
     # Create the app using the default environment (which has the lifespan registered)
     app = pix.App(
@@ -44,6 +50,7 @@ def update(live, interval):
         app_main,
         sourcedir=POCKET_SOURCE_DIR,
         db_path=POCKET_SQLITE_DB,
+        graph=graph,
     )
 
     # Run the update. The engine prints per-component stats after each pass.
@@ -184,6 +191,22 @@ def drop(file_path, yes):
         f"source(s). Tables removed: {', '.join(result['dropped'])}."
     )
 
+
+@cli.command()
+@click.argument("entity")
+@click.option("--limit", default=10, help="Max number of relations to show.")
+def graph(entity, limit):
+    """Print a knowledge-graph entity's neighborhood (relations).
+
+    Requires a graph built with `pocket update --graph`.
+    """
+    from pocket import retrieval
+
+    if not POCKET_SQLITE_DB.exists():
+        click.echo("Database does not exist. Please run 'pocket update --graph' first.")
+        return
+    node = retrieval.graph_neighborhood(entity, limit=limit)
+    click.echo(retrieval.format_neighborhood(node))
 
 if __name__ == "__main__":
     cli()

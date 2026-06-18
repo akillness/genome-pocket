@@ -40,6 +40,24 @@ vendored `pocketindex` engine.
   state (clearing the memo so a later `update` re-adds it). Backed by new
   read helpers `retrieval.list_sources` / `retrieval.target_stats` and a
   write-side `pocket/admin.py` (`drop_target` / `drop_source`).
+- **Local-first knowledge graph — extraction, entity resolution & graph target
+  (POCKET-404a).** `pocket update --graph` (or `POCKET_GRAPH=1`) now extracts a
+  SQLite-resident knowledge graph alongside the vector/lexical index. New
+  `pocketindex/ops/extract.py` turns chunks into `(entities, relations)` behind one
+  `ExtractionModel` protocol with three **local** backends — `DeterministicExtractor`
+  (default; no LLM, no network, no heavy deps, so the whole graph path is
+  offline-testable), `OllamaExtractor` (local daemon), and **`AirLLMExtractor`**
+  (in-process airLLM; an optional `genome-pocket[airllm]` extra that layer-shards a
+  70B-class model onto a single 4GB GPU). **airLLM replaces LiteLLM** as the
+  heavy-model backend: a hosted proxy is the wrong default for Pocket's privacy DNA.
+  New `pocketindex/ops/entity_resolution.py` deduplicates entities via cost-effective
+  blocking → cheap filters → optional LLM adjudication → label propagation over
+  sqlite-vec embeddings (no faiss). The graph reuses the existing
+  lineage/memo/sweep machinery, so editing a file re-extracts and deleting it sweeps
+  its whole subgraph. `entities`/`relations` are modeled as `EntityNode`/`RelationEdge`
+  in `pocket/pipeline.py`; retrieval gains `graph_neighborhood` + `pocket graph <entity>`;
+  `admin.drop_target` clears the graph tables. With `--graph` off the pipeline is
+  byte-for-byte unchanged — zero new cost or dependency for existing users.
 
 ### Changed
 - **Indentation-preserving refine path.** `TextRefiner.refine(text, code=True)`
@@ -55,14 +73,20 @@ vendored `pocketindex` engine.
 ### Docs
 - **Graph target / KG-ops design spec (POCKET-201 / POCKET-404).** Added
   `docs/architecture/graph-target.md`: a local-first GraphRAG design (SQLite-resident
-  `entities`/`relations` reusing the existing lineage/memo/sweep machinery, optional
-  Ollama/LiteLLM extraction, sqlite-vec blocked + LLM-adjudicated entity resolution,
-  N-list RRF retrieval fusion, and HITL gating of low-confidence facts). Grounded in a
-  live 2025–2026 arXiv survey and split POCKET-404 into 404a–404d.
+  `entities`/`relations` reusing the existing lineage/memo/sweep machinery, local-engine
+  extraction via **airLLM/Ollama** — airLLM replacing LiteLLM so even a 70B-class
+  extractor runs on-device, no hosted proxy — sqlite-vec blocked + LLM-adjudicated entity
+  resolution, N-list RRF retrieval fusion, and HITL gating of low-confidence facts).
+  Grounded in a live 2025–2026 arXiv survey and split POCKET-404 into 404a–404d.
 
 ### Tests
 - Added `TestCodeAwareSplitting` (8 cases) and the integration test
   `test_code_file_lineage_and_boundaries`, plus `test_run_reports_stats` and
   `test_live_mode_picks_up_new_file`, and `TestLifecycleCommands` (6 cases)
   covering `ls`/`show`/`drop`, single-source eviction + re-index, and the CLI
-  surface. Full suite (27 tests) passes via `bash run_tests.sh`.
+  surface. Added `TestGraphExtraction` (6 cases — deterministic extraction,
+  JSON validation, provider fallback, entity-resolution merging + optional
+  adjudication) and `TestGraphTarget` (6 cases — `--graph` off creates no graph
+  tables, entities/relations materialize and dedupe, idempotent re-runs, deletion
+  sweeps the subgraph, neighborhood retrieval, and `drop` clears graph tables).
+  Full suite (39 tests) passes via `bash run_tests.sh`.

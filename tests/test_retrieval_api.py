@@ -492,5 +492,263 @@ class TestLifecycleCommands(unittest.TestCase):
         self.assertIn("Dropped", res.output)
 
 
+class TestGraphExtraction(unittest.TestCase):
+    """POCKET-404: offline graph ops (extraction + entity resolution) and the
+    end-to-end graph target built with the deterministic (no-LLM) backend."""
+
+    def test_deterministic_extractor_finds_entities_and_relations(self):
+        from pocketindex.ops.extract import DeterministicExtractor
+
+        ex = DeterministicExtractor()
+        out = ex.extract(
+            "Pocket uses SQLite for storage. SQLite powers the Pocket index."
+        )
+        names = {e.name for e in out.entities}
+        self.assertIn("Pocket", names)
+        self.assertIn("SQLite", names)
+        # Co-occurrence relations are emitted between sentence-mates.
+        self.assertTrue(
+            any(
+                r.predicate == "mentioned_with"
+                and {r.subject, r.object} == {"Pocket", "SQLite"}
+                for r in out.relations
+            )
+        )
+        # Every fact carries confidence and evidence.
+        for e in out.entities:
+            self.assertGreaterEqual(e.confidence, 0.0)
+            self.assertTrue(e.evidence)
+
+    def test_build_extractor_defaults_to_deterministic(self):
+        from pocketindex.ops.extract import build_extractor, DeterministicExtractor
+
+        self.assertIsInstance(build_extractor(), DeterministicExtractor)
+        # Unknown provider falls back to deterministic, never crashes.
+        self.assertIsInstance(
+            build_extractor(provider="nope"), DeterministicExtractor
+        )
+
+    def test_parse_extraction_json_validates_and_normalizes(self):
+        from pocketindex.ops.extract import parse_extraction_json
+
+        ext = parse_extraction_json(
+            '```json\n{"entities":[{"name":" Foo ","type":"Tool","confidence":2}],'
+            '"relations":[{"subject":"Foo","predicate":"Depends On",'
+            '"object":"Bar","confidence":0.7}]}\n```',
+            evidence="ctx",
+        )
+        self.assertEqual(ext.entities[0].name, "Foo")
+        # Confidence is clamped to [0,1].
+        self.assertEqual(ext.entities[0].confidence, 1.0)
+        # Predicate is lower_snake_cased.
+        self.assertEqual(ext.relations[0].predicate, "depends_on")
+
+    def test_parse_extraction_json_rejects_garbage(self):
+        from pocketindex.ops.extract import parse_extraction_json
+
+        with self.assertRaises(ValueError):
+            parse_extraction_json("not json at all", evidence="ctx")
+
+    def test_entity_resolution_merges_duplicates(self):
+        from pocketindex.ops.extract import ExtractedEntity
+        from pocketindex.ops.entity_resolution import resolve_entities
+
+        ents = [
+            ExtractedEntity(name="SQLite", type="Tool", confidence=0.9),
+            ExtractedEntity(name="sqlite", type="Tool", confidence=0.6),
+            ExtractedEntity(name="Pocket", type="Concept", confidence=0.8),
+        ]
+        resolved = resolve_entities(ents)
+        names = {r.name for r in resolved}
+        # The two SQLite surface forms collapse into one cluster.
+        self.assertEqual(len(resolved), 2)
+        self.assertIn("Pocket", names)
+        sqlite_cluster = next(r for r in resolved if r.name.lower() == "sqlite")
+        # Canonical is the higher-confidence surface form; the other is an alias.
+        self.assertEqual(sqlite_cluster.name, "SQLite")
+        self.assertIn("sqlite", sqlite_cluster.aliases)
+
+    def test_entity_resolution_adjudicator_is_optional_and_used(self):
+        from pocketindex.ops.extract import ExtractedEntity
+        from pocketindex.ops.entity_resolution import resolve_entities
+
+        # Two embeddings that are similar (cos within the ambiguous band) but not
+        # identical, with different surface forms.
+        ents = [
+            ExtractedEntity(name="Knowledge Graph", type="Concept", confidence=0.7),
+            ExtractedEntity(name="KG", type="Concept", confidence=0.7),
+        ]
+        embeds = [[1.0, 0.0, 0.0], [0.7, 0.7, 0.0]]  # cosine ~0.71, ambiguous band
+        # No adjudicator: stays unmerged (conservative).
+        self.assertEqual(len(resolve_entities(ents, embeds)), 2)
+        # With an adjudicator that says "merge": collapses to one.
+        merged = resolve_entities(ents, embeds, adjudicator=lambda a, b: True)
+        self.assertEqual(len(merged), 1)
+
+
+class TestGraphTarget(unittest.TestCase):
+    """POCKET-404a: the end-to-end graph target built offline with --graph."""
+
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.source_dir = pathlib.Path(self.temp_dir.name) / "notes"
+        self.source_dir.mkdir()
+        self.db_path = pathlib.Path(self.temp_dir.name) / "pocket_data.db"
+
+        self.old_db_env = os.environ.get("POCKET_SQLITE_DB")
+        os.environ["POCKET_SQLITE_DB"] = str(self.db_path)
+        if "pocket.config" in sys.modules:
+            importlib.reload(sys.modules["pocket.config"])
+        for mod in ("pocket.retrieval", "pocket.admin", "pocket.pipeline"):
+            if mod in sys.modules:
+                importlib.reload(sys.modules[mod])
+
+        (self.source_dir / "a.md").write_text(
+            "# Pocket\n\nPocket uses SQLite for storage. "
+            "SQLite powers the Pocket index.\n"
+        )
+
+    def tearDown(self):
+        if self.old_db_env is not None:
+            os.environ["POCKET_SQLITE_DB"] = self.old_db_env
+        else:
+            os.environ.pop("POCKET_SQLITE_DB", None)
+        if "pocket.config" in sys.modules:
+            importlib.reload(sys.modules["pocket.config"])
+        self.temp_dir.cleanup()
+
+    def _run(self, graph=False):
+        from pocket.pipeline import app_main
+
+        app = pix.App(
+            "pocket_test",
+            app_main,
+            sourcedir=self.source_dir,
+            db_path=self.db_path,
+            graph=graph,
+        )
+        app.update_blocking(live=False, report_to_stdout=False)
+
+    def _conn(self):
+        import sqlite_vec
+
+        conn = sqlite3.connect(str(self.db_path))
+        conn.enable_load_extension(True)
+        sqlite_vec.load(conn)
+        conn.enable_load_extension(False)
+        return conn
+
+    def _table_exists(self, conn, name):
+        return (
+            conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
+                (name,),
+            ).fetchone()
+            is not None
+        )
+
+    def test_graph_off_creates_no_graph_tables(self):
+        self._run(graph=False)
+        conn = self._conn()
+        try:
+            self.assertFalse(self._table_exists(conn, "entities"))
+            self.assertFalse(self._table_exists(conn, "relations"))
+            # The vector/lexical pipeline is unaffected.
+            self.assertGreater(
+                conn.execute("SELECT COUNT(*) FROM embeddings").fetchone()[0], 0
+            )
+        finally:
+            conn.close()
+
+    def test_graph_on_materializes_entities_and_relations(self):
+        self._run(graph=True)
+        conn = self._conn()
+        try:
+            names = {
+                r[0] for r in conn.execute("SELECT name FROM entities").fetchall()
+            }
+            self.assertIn("Pocket", names)
+            self.assertIn("SQLite", names)
+            # SQLite mentioned twice but resolved to a single node.
+            self.assertEqual(
+                conn.execute(
+                    "SELECT COUNT(*) FROM entities WHERE name='SQLite'"
+                ).fetchone()[0],
+                1,
+            )
+            self.assertGreater(
+                conn.execute("SELECT COUNT(*) FROM relations").fetchone()[0], 0
+            )
+            # Edges reference real entity ids.
+            rel = conn.execute(
+                "SELECT subject_id, object_id FROM relations LIMIT 1"
+            ).fetchone()
+            ids = {
+                r[0] for r in conn.execute("SELECT id FROM entities").fetchall()
+            }
+            self.assertIn(rel[0], ids)
+            self.assertIn(rel[1], ids)
+        finally:
+            conn.close()
+
+    def test_graph_extraction_is_idempotent(self):
+        self._run(graph=True)
+        conn = self._conn()
+        try:
+            before = conn.execute("SELECT COUNT(*) FROM entities").fetchone()[0]
+        finally:
+            conn.close()
+        self._run(graph=True)
+        conn = self._conn()
+        try:
+            after = conn.execute("SELECT COUNT(*) FROM entities").fetchone()[0]
+        finally:
+            conn.close()
+        self.assertEqual(before, after)
+
+    def test_deleting_source_sweeps_its_subgraph(self):
+        self._run(graph=True)
+        (self.source_dir / "a.md").unlink()
+        self._run(graph=True)
+        conn = self._conn()
+        try:
+            self.assertEqual(
+                conn.execute("SELECT COUNT(*) FROM entities").fetchone()[0], 0
+            )
+            self.assertEqual(
+                conn.execute("SELECT COUNT(*) FROM relations").fetchone()[0], 0
+            )
+        finally:
+            conn.close()
+
+    def test_graph_neighborhood_retrieval(self):
+        from pocket import retrieval
+
+        importlib.reload(retrieval)
+        self._run(graph=True)
+        node = retrieval.graph_neighborhood("Pocket", db_path=self.db_path)
+        self.assertEqual(node["name"], "Pocket")
+        self.assertTrue(node["neighbors"])
+        self.assertEqual(node["neighbors"][0]["neighbor"], "SQLite")
+        rendered = retrieval.format_neighborhood(node)
+        self.assertIn("Pocket", rendered)
+        self.assertIn("SQLite", rendered)
+
+    def test_drop_removes_graph_tables(self):
+        from pocket import admin
+
+        importlib.reload(admin)
+        self._run(graph=True)
+        result = admin.drop_target(db_path=self.db_path)
+        self.assertTrue(result["existed"])
+        self.assertIn("entities", result["dropped"])
+        self.assertIn("relations", result["dropped"])
+        conn = sqlite3.connect(str(self.db_path))
+        try:
+            self.assertFalse(self._table_exists(conn, "entities"))
+            self.assertFalse(self._table_exists(conn, "relations"))
+        finally:
+            conn.close()
+
 if __name__ == "__main__":
     unittest.main()

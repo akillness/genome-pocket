@@ -31,6 +31,7 @@ Pocket operates on the core mental model of **Target = F(Source)**. All data pro
    - **CLI:** `pocket search "query" --mode hybrid|vector|lexical`
    - **MCP Server:** `pocket-mcp` for Claude Code / Cursor.
    - **REST API Server:** `pocket serve` / `pocket-api` (Starlette + uvicorn) with `/health`, `/search`, and `/lineage` endpoints.
+6. **Knowledge Graph (optional, GraphRAG):** An opt-in branch (`pocket update --graph`) extracts entities/relations into graph tables using a local extractor (`deterministic` default, or `ollama`/`airllm`), reusing the same incremental lineage/memoization/deletion sweep. Query a neighborhood with `pocket graph "<entity>"`.
 
 ---
 
@@ -51,14 +52,14 @@ genome-pocket/
 ├── pocketindex/              # Self-contained ETL engine (vendored, no pip dep)
 │   ├── __init__.py           # App, lifespan, fn, map, mount_each, context
 │   ├── connectors/           # localfs source + sqlite target (lineage/memo + FTS5)
-│   ├── ops/                  # sentence_transformers embedder, text splitter, refiner
+│   ├── ops/                  # embedder, splitter, refiner + graph extract/entity_resolution ops
 │   └── resources/            # file, chunk, deterministic id helpers
 ├── pocket/                   # Application source code
 │   ├── __init__.py
-│   ├── cli.py                # CLI commands (init, update, search)
+│   ├── cli.py                # CLI commands (init, update, search, graph)
 │   ├── config.py             # Configuration & environment variables
 │   ├── mcp_server.py         # MCP server interface
-│   ├── pipeline.py           # ETL pipeline wiring (Source→Refine→Load)
+│   ├── pipeline.py           # ETL pipeline wiring (Source→Refine→Load + graph)
 │   ├── retrieval.py          # Hybrid retrieval (vector + lexical + RRF), shared by CLI/MCP/API
 │   └── api_server.py         # REST API server (Starlette + uvicorn)
 ├── .env                      # Environment configuration
@@ -91,6 +92,13 @@ Create a `.env` file in the root directory:
 POCKET_SOURCE_DIR=./notes
 POCKET_SQLITE_DB=./.pocket/pocket_data.db
 EMBEDDING_MODEL=all-MiniLM-L6-v2
+
+# --- Optional: knowledge-graph branch (GraphRAG, POCKET-404) ---
+# Off by default; the pipeline is exactly the vector/lexical path until enabled.
+POCKET_GRAPH=0                      # or pass `pocket update --graph` per-run
+POCKET_LLM_PROVIDER=deterministic   # deterministic (offline) | ollama | airllm
+# POCKET_LLM_MODEL=                  # backend-specific model id (optional)
+POCKET_GRAPH_MIN_CONFIDENCE=0.0     # facts below this are staged for HITL review
 ```
 
 
@@ -128,16 +136,33 @@ incremental engine actually did against your logs:
 pocket search "What is Pocket?"               # hybrid (vector + lexical) by default
 pocket search "vec_distance_cosine" --mode lexical   # exact keyword / symbol match
 pocket search "how does incremental sync work" --mode vector
+```
 
+#### Build & Query the Knowledge Graph (optional, GraphRAG)
+The graph branch is **opt-in**. When enabled, the same incremental pass extracts
+entities and relations from your notes into graph tables (subject to the same
+lineage/memoization/deletion sweep as chunks), using a local extractor selected
+by `POCKET_LLM_PROVIDER`:
+- `deterministic` (default) — pure, offline, no model/network/dependency.
+- `ollama` — local Ollama daemon over stdlib HTTP.
+- `airllm` — local in-process [airLLM](https://github.com/lyogavin/airllm) inference
+  (layer-sharded HuggingFace weights; install the optional extra: `uv pip install -e '.[airllm]'`).
+
+```bash
+pocket update --graph                          # extract entities/relations alongside chunks
+POCKET_LLM_PROVIDER=ollama pocket update --graph   # use a local Ollama model instead
+pocket graph "Pocket"                          # print an entity's neighborhood (relations)
+pocket graph "Pocket" --limit 20               # cap the number of relations shown
+```
 
 #### Inspect & Manage the Index
-bash
+```bash
 pocket ls                                      # list indexed sources + chunk counts
 pocket show                                    # summarize the index (sources/chunks/FTS)
 pocket show notes/welcome.md                   # show one source's chunk lineage
 pocket drop notes/welcome.md --yes             # evict one source's chunks + lineage
 pocket drop --yes                              # reset the entire index (rebuild on next update)
-
+```
 
 #### Serve the REST API
 ```bash

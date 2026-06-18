@@ -23,4 +23,8 @@ echo "Running code-aware splitting tests (POCKET-403)..."
 uv run python -m unittest tests.test_retrieval_api.TestCodeAwareSplitting
 echo "Running lifecycle command tests (POCKET-405)..."
 uv run python -m unittest tests.test_retrieval_api.TestLifecycleCommands
+echo "Running graph extraction / resolution ops tests (POCKET-404)..."
+uv run python -m unittest tests.test_retrieval_api.TestGraphExtraction
+echo "Running graph target tests (POCKET-404a)..."
+uv run python -m unittest tests.test_retrieval_api.TestGraphTarget
 echo "All tests passed successfully!"

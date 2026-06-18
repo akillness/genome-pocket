@@ -24,6 +24,16 @@ _COMPANION_TABLES = (
     f"_pocket_fts_{_TARGET_TABLE}",
 )
 
+# Knowledge-graph target tables (POCKET-404) and their lineage/memo/FTS
+# companions. `drop_target` removes these too so a reset clears the whole index
+# including any extracted graph.
+_GRAPH_TABLES = ("entities", "relations")
+_GRAPH_COMPANION_TABLES = tuple(
+    f"_pocket_{kind}_{table}"
+    for table in _GRAPH_TABLES
+    for kind in ("lineage", "memo", "fts")
+)
+
 
 def drop_target(db_path: Optional[Path] = None) -> Dict:
     """Reset all materialized target state for the knowledge base.
@@ -42,7 +52,12 @@ def drop_target(db_path: Optional[Path] = None) -> Dict:
     try:
         sources, chunks = _count(conn)
         dropped = []
-        for table in (_TARGET_TABLE, *_COMPANION_TABLES):
+        for table in (
+            _TARGET_TABLE,
+            *_COMPANION_TABLES,
+            *_GRAPH_TABLES,
+            *_GRAPH_COMPANION_TABLES,
+        ):
             if _table_exists(conn, table):
                 conn.execute(f"DROP TABLE {table}")
                 dropped.append(table)

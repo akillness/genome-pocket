@@ -36,7 +36,7 @@ and edge lineage-tagged and (when low-confidence) gated behind human approval.
 - A SQLite-resident graph target (`entities`, `relations`) reusing the existing
   lineage/memo/sweep machinery of `pocketindex/connectors/sqlite.py`.
 - An optional LLM extraction op (`pocketindex/ops/extract.py`, the `ops.litellm` parity
-  called for in POCKET-404).
+  called for in POCKET-404, re-homed onto local engines — airLLM/Ollama, not a hosted proxy).
 - An entity-resolution op (`pocketindex/ops/entity_resolution.py`, the
   `ops.entity_resolution` parity).
 - Pipeline wiring (`pocket/pipeline.py`) and retrieval/CLI/MCP integration points.
@@ -103,26 +103,39 @@ the new tables by adding them to `_COMPANION_TABLES` handling in `pocket/admin.p
 
 ### 4.1 LLM extraction op — `pocketindex/ops/extract.py`
 
-Parity target: upstream `cocoindex.ops.litellm`. A dependency-light op that turns a chunk
-into `(entities, relations)`.
+Parity target: upstream `cocoindex.ops.litellm`, but **re-homed onto a local engine**.
+Where upstream proxies a *hosted* API via LiteLLM, Pocket's privacy/local-first DNA makes a
+hosted proxy the wrong default. We ship **airLLM** (`lyogavin/airllm`) as the local heavy-model
+backend instead of LiteLLM: airLLM layer-sharded inference runs a 70B-class model on a single
+4GB GPU (8GB for 405B) by streaming layers from disk, *without* quantization/distillation
+accuracy loss — so a user can run a genuinely capable extractor entirely on their own machine.
+A dependency-light op turns a chunk into `(entities, relations)`:
 
-- **Provider abstraction:** `ExtractionModel` protocol with two built-in backends —
-  `OllamaExtractor` (default, local, privacy-preserving) and `LiteLLMExtractor` (optional,
-  for users who opt into a hosted model). Selected via `POCKET_LLM_PROVIDER` /
-  `POCKET_LLM_MODEL` config (env-overridable, mirroring existing `EMBEDDING_MODEL`).
+- **Provider abstraction:** an `ExtractionModel` protocol (`extract(text) -> Extraction`)
+  with three built-in backends —
+  `DeterministicExtractor` (default, **no LLM, no network, no deps** — a noun-phrase /
+  co-occurrence extractor that makes the whole graph pipeline offline-testable, the 404a
+  slice), `OllamaExtractor` (local HTTP daemon), and `AirLLMExtractor` (local in-process
+  airLLM for users who want a large model on modest hardware). Selected via
+  `POCKET_LLM_PROVIDER` (`deterministic` | `ollama` | `airllm`) / `POCKET_LLM_MODEL`
+  (env-overridable, mirroring existing `EMBEDDING_MODEL`). airLLM/torch stay an **optional
+  extra** (`pip install genome-pocket[airllm]`); importing the backend is lazy so the base
+  install carries zero torch/transformers weight.
 - **Schema-agnostic prompt** (per arXiv:2606.01208): the model proposes entity types and
   predicates; we do not pin an ontology. Output is strict JSON validated against a small
   dataclass schema; malformed output → drop the chunk's extraction, log, continue (same
-  degrade-don't-crash posture as the FTS5 fallback).
+  degrade-don't-crash posture as the FTS5 fallback). The deterministic backend emits the
+  same dataclass shape so downstream code is backend-agnostic.
 - **Confidence + evidence** (per arXiv:2606.01210 / 2605.26835): every entity and relation
   carries a `confidence ∈ [0,1]` and a verbatim `evidence` span. These feed the HITL gate
   and lineage.
 - **Memoized:** extraction is the expensive step, so the op is `@pix.fn(memo=True)` keyed
   on chunk text + model id + prompt-version, so unchanged chunks and unchanged prompts are
-  never re-sent to the LLM.
+  never re-sent to the model.
 - **Disabled by default:** `pocket update --graph` (or `POCKET_GRAPH=1`) opts in. With the
   flag off, the pipeline is exactly today's vector/lexical pipeline — zero new cost or
   dependency for existing users.
+
 
 ### 4.2 Entity-resolution op — `pocketindex/ops/entity_resolution.py`
 
@@ -211,7 +224,7 @@ consumer-hardware GraphRAG benchmark, arXiv:2605.20815).
 | Decision | Rationale |
 |----------|-----------|
 | SQLite graph, not SurrealDB, for v1 | No new runtime/dependency; reuses lineage/memo/sweep verbatim; honors local-first DNA. SurrealDB/Neo4j become optional alternate connectors later. |
-| Local LLM (Ollama) default, hosted optional | Privacy DNA + 2026 evidence that local GraphRAG is viable (arXiv:2605.20815). |
+| Local engine (Ollama / airLLM) default, no hosted proxy | Privacy DNA + 2026 evidence that local GraphRAG is viable (arXiv:2605.20815). airLLM replaces LiteLLM so even a 70B-class extractor runs locally on a 4GB GPU — no data leaves the machine. |
 | Graph branch opt-in (`--graph`) | Extraction is the one genuinely expensive/optional step; existing users pay nothing. |
 | Blocking + selective LLM ER, not all-pairs | Cost-effective ER evidence (arXiv:2605.25814); reuses sqlite-vec, no faiss. |
 | Confidence + evidence on every fact | Verifiability concerns (arXiv:2606.01210) and HITL gating. |
@@ -225,7 +238,8 @@ POCKET-404 is too large as one item. Recommend splitting:
 1. **POCKET-404a — Graph target schema:** `entities`/`relations` tables + dataclasses +
    `pocket/admin.py` + `retrieval.list_sources` extensions; no LLM yet (extraction stubbed
    by a deterministic noun-phrase extractor so the plumbing is testable offline).
-2. **POCKET-404b — LLM extraction op:** `ops/extract.py` with Ollama/LiteLLM backends,
+2. **POCKET-404b — LLM extraction op:** `ops/extract.py` with Ollama/airLLM backends,
+   memoization, schema-agnostic JSON + confidence/evidence.
    memoization, schema-agnostic JSON + confidence/evidence.
 3. **POCKET-404c — Entity-resolution op:** `ops/entity_resolution.py` (blocking →
    adjudication → propagation).

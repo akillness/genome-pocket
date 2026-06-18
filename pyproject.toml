@@ -14,6 +14,17 @@ dependencies = [
     "uvicorn>=0.29.0",
 ]
 
+[project.optional-dependencies]
+# Optional local heavy-model extraction backend for the knowledge-graph op
+# (POCKET-404). airLLM layer-shards a 70B-class model onto a single 4GB GPU so a
+# capable extractor runs entirely on-device. The base install stays ML-free; the
+# AirLLMExtractor imports these lazily.
+airllm = [
+    "airllm>=2.11.0",
+    "torch",
+    "transformers",
+]
+
 
 [project.scripts]
 pocket = "pocket.cli:cli"

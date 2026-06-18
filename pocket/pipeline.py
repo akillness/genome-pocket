@@ -1,6 +1,7 @@
+import json
 import pathlib
 from dataclasses import dataclass
-from typing import Annotated, AsyncIterator
+from typing import Annotated, AsyncIterator, List, Tuple
 import numpy as np
 from numpy.typing import NDArray
 
@@ -10,6 +11,8 @@ from pocketindex.ops.sentence_transformers import SentenceTransformerEmbedder
 from pocketindex.resources.file import FileLike
 from pocketindex.ops.text import RecursiveSplitter, detect_code_language
 from pocketindex.ops.refine import TextRefiner
+from pocketindex.ops.extract import build_extractor, ExtractedEntity
+from pocketindex.ops.entity_resolution import resolve_entities, normalize
 from pocketindex.resources.id import IdGenerator
 from pocketindex.resources.chunk import Chunk
 
@@ -29,6 +32,37 @@ class ChunkEmbedding:
     start_offset: int                         # Character start offset in the source file
     end_offset: int                           # Character end offset in the source file
 
+
+@dataclass
+class EntityNode:
+    """A resolved knowledge-graph entity (node). Derived from chunks, so a
+    chunk's source file remains the ultimate provenance anchor."""
+
+    id: int                                   # Stable id from canonical name + type
+    name: str                                 # Canonical surface form (post-resolution)
+    type: str                                 # Proposed type (schema-agnostic)
+    aliases: str                              # JSON list of merged surface forms
+    embedding: Annotated[NDArray, EMBEDDER]   # Vector of `name` (powers blocking + lookup)
+    summary: str                              # Optional one-line description
+    confidence: float                         # Max extraction confidence
+    source_file: str                          # Primary chunk's source file (lineage anchor)
+    source_chunk_ids: str                     # JSON list of chunk ids mentioning this entity
+
+
+@dataclass
+class RelationEdge:
+    """A knowledge-graph relation (edge) between two entities."""
+
+    id: int                                   # Stable id from (subject_id, predicate, object_id)
+    subject_id: int                           # -> EntityNode.id
+    predicate: str                            # Relation type (schema-agnostic, lower_snake)
+    object_id: int                            # -> EntityNode.id
+    evidence: str                             # Verbatim source span supporting the edge
+    confidence: float                         # Extraction confidence
+    source_file: str                          # Lineage anchor
+    source_chunk_id: int                      # Chunk the edge was extracted from
+
+
 _splitter = RecursiveSplitter()
 _refiner = TextRefiner()
 
@@ -41,6 +75,24 @@ async def pocket_lifespan(builder: pix.EnvironmentBuilder) -> AsyncIterator[None
     db_path = os.getenv("POCKET_SQLITE_DB") or str(config.POCKET_SQLITE_DB)
     builder.provide_with(SQLITE_DB, sqlite.managed_connection(db_path, load_vec=True))
     yield
+
+
+def _chunk_file(raw_text: str, filename: pathlib.PurePath) -> List[Chunk]:
+    """Refine + split a file's raw text into offset-exact chunks.
+
+    Shared by the embedding pass and the graph-extraction pass so both attribute
+    facts to the same chunk ids and the same source offsets.
+    """
+    language = detect_code_language(filename=filename.name)
+    is_code = language is not None and language not in ("markdown", "html")
+    refined = _refiner.refine(raw_text, code=is_code)
+    chunks = _splitter.split(
+        refined.text, chunk_size=1000, chunk_overlap=200, language=language
+    )
+    for chunk in chunks:
+        chunk.start.char_offset = refined.source_offset(chunk.start.char_offset)
+        chunk.end.char_offset = refined.source_offset(chunk.end.char_offset)
+    return chunks
 
 
 @pix.fn
@@ -68,26 +120,135 @@ async def process_file(file: FileLike, table: sqlite.TableTarget[ChunkEmbedding]
     # Detect whether this is source code from its filename. Code files get an
     # indentation-preserving refine pass and language-aware (structural)
     # splitting; prose/markdown keeps the original whitespace-collapsing path.
-    language = detect_code_language(filename=file.file_path.path.name)
-    is_code = language is not None and language not in ("markdown", "html")
-    # Refinement stage: normalize/clean the raw source before chunking. The
-    # refined document keeps an offset map so chunk lineage still points at the
-    # original source bytes the user can open.
-    refined = _refiner.refine(raw_text, code=is_code)
-    chunks = _splitter.split(
-        refined.text, chunk_size=1000, chunk_overlap=200, language=language
-    )
-    # Translate each chunk's offsets from refined-text space back to original
-    # source space so stored lineage references real file positions.
-    for chunk in chunks:
-        chunk.start.char_offset = refined.source_offset(chunk.start.char_offset)
-        chunk.end.char_offset = refined.source_offset(chunk.end.char_offset)
+    chunks = _chunk_file(raw_text, file.file_path.path)
     id_gen = IdGenerator()
 
     await pix.map(process_chunk, chunks, file.file_path.path, id_gen, table)
 
+
+@pix.fn(memo=True)
+async def extract_graph_file(
+    file: FileLike,
+    entities_target: sqlite.TableTarget[EntityNode],
+    relations_target: sqlite.TableTarget[RelationEdge],
+) -> None:
+    """Extract a file's knowledge subgraph (entities + relations).
+
+    Runs as its own memoized pass (primary lineage target = entities) so it is
+    independent of the embedding pass: enabling ``--graph`` on an already-indexed
+    corpus still extracts, and an unchanged file is skipped by the entities memo.
+
+    The relations target shares the same ``_current_source_key`` (set by the
+    engine for this file), so we drive its ``begin_source`` / ``end_source``
+    manually here; ``app_main`` sweeps it after the pass.
+    """
+    source_key = pix.get_current_source_key()
+    relations_target.begin_source(source_key)
+
+    raw_text = await file.read_text()
+    filename = file.file_path.path
+    chunks = _chunk_file(raw_text, filename)
+
+    extractor = build_extractor(config.POCKET_LLM_PROVIDER, config.POCKET_LLM_MODEL)
+    id_gen = IdGenerator()
+
+    # Collect every extracted entity across the file's chunks, remembering which
+    # chunk each came from so resolved nodes can carry their source_chunk_ids and
+    # edges can reference the originating chunk.
+    all_entities: List[ExtractedEntity] = []
+    entity_chunk_id: dict = {}      # id(entity) -> chunk id
+    relations: list = []            # (ExtractedRelation, chunk_id)
+    for chunk in chunks:
+        chunk_id = await id_gen.next_id(chunk.text)
+        extraction = extractor.extract(chunk.text)
+        for ent in extraction.entities:
+            all_entities.append(ent)
+            entity_chunk_id[id(ent)] = chunk_id
+        for rel in extraction.relations:
+            relations.append((rel, chunk_id))
+
+    if not all_entities:
+        relations_target.end_source(source_key, "")
+        return
+
+    embedder = pix.use_context(EMBEDDER)
+    # Embed each entity name to drive blocking-based resolution and vector lookup.
+    embeddings = [list(map(float, await embedder.embed(e.name))) for e in all_entities]
+
+    resolved = resolve_entities(all_entities, embeddings)
+
+    # Map every surface form (normalized) -> canonical entity id so edges can be
+    # rewired to canonical endpoints before they are committed.
+    surface_to_id: dict = {}
+    id_to_node: dict = {}
+    min_conf = config.POCKET_GRAPH_MIN_CONFIDENCE
+    for r in resolved:
+        ent_id = await id_gen.next_id(f"{r.name}\x00{r.type}")
+        chunk_ids = sorted(
+            {entity_chunk_id[id(m)] for m in r.members if id(m) in entity_chunk_id}
+        )
+        # Average the canonical name's embedding for the node vector.
+        node_vec = await embedder.embed(r.name)
+        node = EntityNode(
+            id=ent_id,
+            name=r.name,
+            type=r.type,
+            aliases=json.dumps(r.aliases),
+            embedding=node_vec,
+            summary="",
+            confidence=r.confidence,
+            source_file=str(filename),
+            source_chunk_ids=json.dumps(chunk_ids),
+        )
+        id_to_node[ent_id] = node
+        for member in r.members:
+            surface_to_id[normalize(member.name)] = ent_id
+
+    # Commit entity nodes (HITL gate: skip facts below the confidence threshold).
+    for node in id_to_node.values():
+        if node.confidence < min_conf:
+            continue
+        entities_target.declare_row(row=node)
+
+    # Rewire and commit edges to canonical entity ids.
+    seen_edge_ids = set()
+    for rel, chunk_id in relations:
+        subj_id = surface_to_id.get(normalize(rel.subject))
+        obj_id = surface_to_id.get(normalize(rel.object))
+        if subj_id is None or obj_id is None or subj_id == obj_id:
+            continue
+        if rel.confidence < min_conf:
+            continue
+        # Both endpoints must actually be committed nodes.
+        if subj_id not in id_to_node or obj_id not in id_to_node:
+            continue
+        if id_to_node[subj_id].confidence < min_conf or id_to_node[obj_id].confidence < min_conf:
+            continue
+        edge_id = await id_gen.next_id(f"{subj_id}\x00{rel.predicate}\x00{obj_id}")
+        if edge_id in seen_edge_ids:
+            continue
+        seen_edge_ids.add(edge_id)
+        relations_target.declare_row(row=RelationEdge(
+            id=edge_id,
+            subject_id=subj_id,
+            predicate=rel.predicate,
+            object_id=obj_id,
+            evidence=rel.evidence[:500],
+            confidence=rel.confidence,
+            source_file=str(filename),
+            source_chunk_id=chunk_id,
+        ))
+
+    # The entities target's memo (set by the engine) is the incremental key; the
+    # relations target only needs its lineage reconciled, so pass an empty hash.
+    relations_target.end_source(source_key, "")
+
 @pix.fn
-async def app_main(sourcedir: pathlib.Path, db_path: pathlib.Path) -> None:
+async def app_main(
+    sourcedir: pathlib.Path,
+    db_path: pathlib.Path,
+    graph: bool = False,
+) -> None:
     # 1. Mount SQLite target table
     target_table = await sqlite.mount_table_target(
         SQLITE_DB,
@@ -101,5 +262,27 @@ async def app_main(sourcedir: pathlib.Path, db_path: pathlib.Path) -> None:
     # 2. Walk source directory
     files = localfs.walk_dir(sourcedir, recursive=True, live=True)
     
-    # 3. Mount file processing component
+    # 3. Mount file processing component (vector/lexical pass).
     await pix.mount_each(process_file, files.items(), target_table)
+
+    # 4. Optional graph branch (POCKET-404): extract entities/relations. Opt-in
+    #    via `--graph` or POCKET_GRAPH so default runs are byte-for-byte unchanged.
+    if graph or config.POCKET_GRAPH:
+        entities_target = await sqlite.mount_table_target(
+            SQLITE_DB,
+            table_name="entities",
+            table_schema=await sqlite.TableSchema.from_class(EntityNode, primary_key=["id"]),
+            fts_text_column="name",
+        )
+        relations_target = await sqlite.mount_table_target(
+            SQLITE_DB,
+            table_name="relations",
+            table_schema=await sqlite.TableSchema.from_class(RelationEdge, primary_key=["id"]),
+        )
+        graph_items = files.items()
+        # The graph pass's primary lineage/memo target is `entities`; relations are
+        # driven manually inside the component and swept here afterwards.
+        await pix.mount_each(
+            extract_graph_file, graph_items, entities_target, relations_target
+        )
+        relations_target.sweep({str(k) for k in graph_items.keys()})

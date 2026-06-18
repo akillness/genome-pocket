@@ -437,3 +437,83 @@ def format_neighborhood(node: Dict) -> str:
                 f"[{n.get('confidence', 0):.2f}]"
             )
     return "\n".join(lines)
+
+
+def list_graph_concepts(
+    concept: str | None = None,
+    limit: int = 20,
+    db_path: Optional[Path] = None,
+) -> List[Dict]:
+    """Return top entities (and their top relation) from the knowledge graph.
+
+    Requires a graph built with ``pocket update --graph`` (``POCKET_GRAPH=1``).
+    When *concept* is given, filters by case-insensitive prefix match on the
+    entity name; otherwise returns the highest-confidence entities up to *limit*.
+
+    Each dict has keys: name, type, confidence, source_file, top_relation.
+    Returns an empty list when the graph tables do not exist.
+    """
+    db_path = db_path or config.POCKET_SQLITE_DB
+    if not Path(db_path).exists():
+        return []
+    conn = sqlite3.connect(str(db_path))
+    try:
+        if not _graph_available(conn):
+            return []
+        if concept:
+            rows = conn.execute(
+                """
+                SELECT id, name, type, confidence, source_file
+                FROM entities
+                WHERE lower(name) LIKE lower(?)
+                ORDER BY confidence DESC
+                LIMIT ?
+                """,
+                (concept.lower() + "%", limit),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """
+                SELECT id, name, type, confidence, source_file
+                FROM entities
+                ORDER BY confidence DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+
+        results = []
+        for eid, name, etype, conf, src in rows:
+            # Fetch the single most-confident relation for context.
+            rel = conn.execute(
+                """
+                SELECT r.predicate, ob.name AS obj_name, so.name AS sub_name,
+                       r.subject_id
+                FROM relations r
+                LEFT JOIN entities ob ON ob.id = r.object_id
+                LEFT JOIN entities so ON so.id = r.subject_id
+                WHERE r.subject_id = ? OR r.object_id = ?
+                ORDER BY r.confidence DESC
+                LIMIT 1
+                """,
+                (eid, eid),
+            ).fetchone()
+            top_relation = None
+            if rel:
+                pred, obj_name, sub_name, subj_id = rel
+                if subj_id == eid:
+                    top_relation = f"{name} -{pred}-> {obj_name}"
+                else:
+                    top_relation = f"{sub_name} -{pred}-> {name}"
+            results.append(
+                {
+                    "name": name,
+                    "type": etype,
+                    "confidence": conf,
+                    "source_file": src,
+                    "top_relation": top_relation,
+                }
+            )
+        return results
+    finally:
+        conn.close()

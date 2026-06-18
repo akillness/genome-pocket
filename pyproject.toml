@@ -39,3 +39,8 @@ packages = [
     "pocketindex.ops",
     "pocketindex.resources",
 ]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.0",
+]

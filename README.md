@@ -214,4 +214,23 @@ To connect Claude Code or Cursor to your Pocket knowledge base, add the followin
 ### Exposed Tools
 - `search_knowledge(query: str, limit: int = 5, mode: str = "hybrid")`: Search the personal knowledge base using hybrid (vector + lexical) retrieval; `mode` is `hybrid`, `vector`, or `lexical`.
 - `get_file_lineage(file_path: str)`: Retrieve the indexing history and lineage details for a specific source file.
-- `list_concepts(concept: str = None)`: **Stub** — graph-backed concept listing is not yet implemented; currently returns a "not yet implemented (Sprint 2)" message.
+- `list_concepts(concept: str = None)`: List top entities and their relations from the knowledge graph. Requires a graph built with `pocket update --graph` (`POCKET_GRAPH=1`). Returns up to 20 highest-confidence entities with type, confidence, source file, and top relation. Optional `concept` prefix filters by name.
+
+
+---
+
+## 🗺️ Roadmap
+
+Genome-pocket is evolving toward full adoption of the `cocoindex` runtime. The phased plan (full details in [`docs/architecture/cocoindex-gap.md`](docs/architecture/cocoindex-gap.md)):
+
+| Phase | What | Status |
+|-------|------|--------|
+| P0 | **Test infra** — `MockEmbedder` session patch; all 41 tests run offline in < 10 s | ✅ done |
+| P1 | **Content fingerprinting** — `cocoindex.connectorkits.fingerprint` replaces SHA-256 in `_compute_memo_hash`; unchanged files skip re-index | ✅ done |
+| P2 | **Concurrent `map()`** — `asyncio.gather` replaces sequential loop; matches real cocoindex contract | ✅ done |
+| P3 | **`list_concepts` MCP** — live graph query via `retrieval.list_graph_concepts()`; `POCKET_GRAPH=1` guard | ✅ done |
+| P4 | **State-diff delta writes** — `connectorkits.statediff.DiffAction` for proper upsert/delete; prevents chunk accumulation on edits | ⏳ next |
+| P5 | **Persistent memo store** — SQLite-backed `@fn(memo=True)` that survives restarts | ⏳ planned |
+| P6 | **Native cocoindex PoC** — `pocket/pipeline_coco.py` running against the real cocoindex engine side-by-side | ⏳ planned |
+
+See [`docs/architecture/cocoindex-gap.md`](docs/architecture/cocoindex-gap.md) for the full gap analysis, missing APIs, and migration sequencing.

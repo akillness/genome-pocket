@@ -183,6 +183,19 @@ curl -X POST http://127.0.0.1:8000/search -H 'Content-Type: application/json' \
 
 ---
 
+## 📚 Documentation
+
+Design docs live under [`docs/architecture/`](docs/architecture/):
+
+- [`system-overview.md`](docs/architecture/system-overview.md) — Pocket System Overview & DNA Core: the big-picture model and how the pieces fit.
+- [`data-flow.md`](docs/architecture/data-flow.md) — Declarative Data Flow: how `Target = F(Source)` drives the incremental Source→Refine→Load→Serve pipeline.
+- [`retrieval-layer.md`](docs/architecture/retrieval-layer.md) — Retrieval Layer: the shared hybrid (vector + lexical + RRF) search path used by CLI/MCP/API.
+- [`graph-target.md`](docs/architecture/graph-target.md) — Graph Target & Knowledge-Graph Ops design spec: entity/relation extraction and the GraphRAG branch (POCKET-404).
+- [`ops-layer.md`](docs/architecture/ops-layer.md) — Ops Layer: evaluation, tracing, and the human-in-the-loop (HITL) review gate.
+- [`mcp-server.md`](docs/architecture/mcp-server.md) — Model Context Protocol (MCP) Integration: how Pocket exposes tools to Claude Code / Cursor.
+
+---
+
 ## 🤖 MCP Server Integration
 
 To connect Claude Code or Cursor to your Pocket knowledge base, add the following to your MCP configuration file (e.g., `mcp_config.json`):
@@ -201,4 +214,4 @@ To connect Claude Code or Cursor to your Pocket knowledge base, add the followin
 ### Exposed Tools
 - `search_knowledge(query: str, limit: int = 5, mode: str = "hybrid")`: Search the personal knowledge base using hybrid (vector + lexical) retrieval; `mode` is `hybrid`, `vector`, or `lexical`.
 - `get_file_lineage(file_path: str)`: Retrieve the indexing history and lineage details for a specific source file.
-- `list_concepts(concept: str = None)`: List key concepts and relationships (Sprint 2).
+- `list_concepts(concept: str = None)`: **Stub** — graph-backed concept listing is not yet implemented; currently returns a "not yet implemented (Sprint 2)" message.

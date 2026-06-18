@@ -52,6 +52,14 @@ vendored `pocketindex` engine.
   indentation.
 - Removed a duplicated `IdGenerator` bullet in the README transformation steps.
 
+### Docs
+- **Graph target / KG-ops design spec (POCKET-201 / POCKET-404).** Added
+  `docs/architecture/graph-target.md`: a local-first GraphRAG design (SQLite-resident
+  `entities`/`relations` reusing the existing lineage/memo/sweep machinery, optional
+  Ollama/LiteLLM extraction, sqlite-vec blocked + LLM-adjudicated entity resolution,
+  N-list RRF retrieval fusion, and HITL gating of low-confidence facts). Grounded in a
+  live 2025–2026 arXiv survey and split POCKET-404 into 404a–404d.
+
 ### Tests
 - Added `TestCodeAwareSplitting` (8 cases) and the integration test
   `test_code_file_lineage_and_boundaries`, plus `test_run_reports_stats` and

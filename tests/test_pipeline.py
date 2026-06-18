@@ -119,6 +119,68 @@ class TestPocketPipeline(unittest.TestCase):
         finally:
             conn.close()
 
+    def _count_fts_rows(self, where=""):
+        """Count rows in the FTS5 lexical companion index.
+
+        The lexical (BM25) index is a separate virtual table that must stay in
+        lockstep with the main ``embeddings`` table; any row left behind here is
+        an orphan that keyword search could surface as a dangling hit.
+        """
+        conn = sqlite3.connect(str(self.db_path))
+        try:
+            sql = (
+                "SELECT COUNT(*) FROM _pocket_fts_embeddings"
+                + (f" WHERE {where}" if where else "")
+            )
+            return conn.execute(sql).fetchone()[0]
+        finally:
+            conn.close()
+
+    def test_fts_index_reconciles_on_edit_and_delete(self):
+        """The FTS5 lexical index must not accumulate orphans.
+
+        On every run the lexical companion (`_pocket_fts_embeddings`) must hold
+        exactly the same row set as `embeddings`. If `_fts_delete_rows` is not
+        called when chunks are reconciled away (on edit) or swept (on delete),
+        stale BM25 rows linger and keyword search returns dangling hits.
+        """
+        second = self.source_dir / "second.md"
+        second.write_text("# Second\n\nAnother note about pocket knowledge.")
+
+        # First run: FTS index mirrors the main table exactly.
+        self._run()
+        base_main = self._count_rows()
+        self.assertGreater(base_main, 0)
+        self.assertEqual(
+            self._count_fts_rows(), base_main,
+            "FTS index must mirror the main table after the first run",
+        )
+
+        # Edit one file so its chunk set changes; orphaned FTS rows must be
+        # removed, not merely shadowed by the main-table reconciliation.
+        self.note_file.write_text(
+            "# Test Note\n\nWholly rewritten body so the chunk ids differ entirely."
+        )
+        self._run()
+        self.assertEqual(
+            self._count_fts_rows(), self._count_rows(),
+            "FTS index must stay in lockstep after an edit reshapes chunks",
+        )
+
+        # Delete a source file: its lexical rows must be swept along with it.
+        second.unlink()
+        self._run()
+        self.assertEqual(
+            self._count_fts_rows("row_id IN (SELECT id FROM embeddings "
+                                 "WHERE file_path LIKE '%second.md')"),
+            0,
+            "deleted source must leave no lexical rows",
+        )
+        self.assertEqual(
+            self._count_fts_rows(), self._count_rows(),
+            "FTS index must stay in lockstep after a delete sweep",
+        )
+
     def test_incremental_memoization(self):
         """DoD #3: re-running with no edits skips reprocessing; editing one
         file reprocesses only that file."""

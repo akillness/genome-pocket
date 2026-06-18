@@ -11,8 +11,14 @@ echo "Running deletion propagation test (DoD #4)..."
 uv run python -m unittest tests.test_pipeline.TestPocketPipeline.test_deletion_propagates
 echo "Running transaction rollback test (abort_source)..."
 uv run python -m unittest tests.test_pipeline.TestPocketPipeline.test_abort_source_discards_uncommitted_rows
+echo "Running run-stats / monitoring test..."
+uv run python -m unittest tests.test_pipeline.TestPocketPipeline.test_run_reports_stats
+echo "Running live-mode watch test..."
+uv run python -m unittest tests.test_pipeline.TestPocketPipeline.test_live_mode_picks_up_new_file
 echo "Running hybrid retrieval + REST API tests..."
 uv run python -m unittest tests.test_retrieval_api.TestRetrievalAndApi
 echo "Running text refiner unit tests..."
 uv run python -m unittest tests.test_retrieval_api.TestTextRefiner
+echo "Running code-aware splitting tests (POCKET-403)..."
+uv run python -m unittest tests.test_retrieval_api.TestCodeAwareSplitting
 echo "All tests passed successfully!"

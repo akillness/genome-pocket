@@ -3,7 +3,10 @@ import asyncio
 import contextvars
 import hashlib
 import inspect
+import time
 from typing import Any, Callable, Dict, Generic, List, TypeVar, AsyncIterator
+
+from pocketindex.stats import ComponentStats, UpdateStats
 
 
 T = TypeVar("T")
@@ -20,6 +23,13 @@ _CONTEXT: Dict[str, Any] = {}
 # This is the backbone of incremental memoization and deletion propagation.
 _current_source_key: contextvars.ContextVar = contextvars.ContextVar(
     "pocket_current_source_key", default=None
+)
+
+# Tracks the UpdateStats accumulator for the active App run, so mount_each can
+# record per-component processing counters without the caller threading them
+# through every layer of the pipeline.
+_ACTIVE_STATS: contextvars.ContextVar = contextvars.ContextVar(
+    "pocket_active_stats", default=None
 )
 
 def get_current_source_key():
@@ -107,7 +117,7 @@ def _find_target(args: tuple):
     return None
 
 
-async def mount_each(func: Callable, items: Any, *args) -> None:
+async def mount_each(func: Callable, items: Any, *args, stats: "UpdateStats" = None) -> "UpdateStats":
     """Mount each source item and process it incrementally.
 
     Implements the declarative ``Target = F(Source)`` contract:
@@ -115,6 +125,9 @@ async def mount_each(func: Callable, items: Any, *args) -> None:
       * reconciliation -> reprocessed items drop chunks no longer emitted;
       * deletion      -> items that vanished from the source are swept from
                          the target along with their lineage state.
+
+    Returns an :class:`UpdateStats` snapshot (creating one if not supplied) so
+    callers can monitor adds/reprocesses/unchanged/deletes/errors per run.
     """
     if hasattr(items, "items"):
         iterable = list(items.items())
@@ -125,17 +138,26 @@ async def mount_each(func: Callable, items: Any, *args) -> None:
     memo_enabled = bool(getattr(func, "_memo", False))
     seen_keys = set()
 
+    if stats is None:
+        stats = _ACTIVE_STATS.get() or UpdateStats()
+    component = stats.component(getattr(func, "__name__", "component"))
+
     for key, value in iterable:
         source_key = str(key)
         seen_keys.add(source_key)
 
         new_hash = await _compute_memo_hash(value)
+        had_prior_state = (
+            target is not None and target.get_memo(source_key) is not None
+        )
         if target is not None and memo_enabled and new_hash:
             stored_hash = target.get_memo(source_key)
             if stored_hash is not None and stored_hash == new_hash:
                 # Unchanged source: skip all work (incremental fast path).
+                component.num_unchanged += 1
                 continue
 
+        component.num_execution_starts += 1
         token = _current_source_key.set(source_key)
         if target is not None:
             target.begin_source(source_key)
@@ -147,6 +169,7 @@ async def mount_each(func: Callable, items: Any, *args) -> None:
         except BaseException:
             # Roll back any uncommitted rows this source emitted so a failure
             # mid-source never leaks partial data into the next commit.
+            component.num_errors += 1
             if target is not None:
                 target.abort_source(source_key)
             raise
@@ -154,25 +177,51 @@ async def mount_each(func: Callable, items: Any, *args) -> None:
             _current_source_key.reset(token)
         if target is not None:
             target.end_source(source_key, new_hash)
+        if had_prior_state:
+            component.num_reprocesses += 1
+        else:
+            component.num_adds += 1
 
     # Garbage-collect target rows whose source items no longer exist.
     if target is not None:
-        target.sweep(seen_keys)
+        removed = target.sweep(seen_keys)
+        component.num_deletes += int(removed or 0)
+
+    return stats
 
 class App:
     def __init__(self, name: str, main_func: Callable, **kwargs):
         self.name = name
         self.main_func = main_func
         self.kwargs = kwargs
+        # Most recent run statistics, for monitoring/log cross-checking.
+        self.last_stats: "UpdateStats" = None
 
-    def update_blocking(self, live: bool = False, report_to_stdout: bool = True) -> None:
-        asyncio.run(self.run_async(live))
+    def update_blocking(
+        self,
+        live: bool = False,
+        report_to_stdout: bool = True,
+        live_interval: float = 2.0,
+    ) -> "UpdateStats":
+        return asyncio.run(
+            self.run_async(
+                live=live,
+                report_to_stdout=report_to_stdout,
+                live_interval=live_interval,
+            )
+        )
 
-    async def run_async(self, live: bool = False) -> None:
+    async def run_async(
+        self,
+        live: bool = False,
+        report_to_stdout: bool = True,
+        live_interval: float = 2.0,
+    ) -> "UpdateStats":
         # 1. Run lifespan to set up context
         builder = EnvironmentBuilder()
         active_managers = []
-        
+        gen = None
+
         if _lifespan_func:
             # _lifespan_func is an async generator
             gen = _lifespan_func(builder)
@@ -180,20 +229,52 @@ class App:
                 await gen.__anext__()
             except StopAsyncIteration:
                 pass
-            
+
             # For any provided values that are async context managers, enter them
             for key_name, val in list(_CONTEXT.items()):
                 if hasattr(val, "__aenter__"):
                     entered_val = await val.__aenter__()
                     _CONTEXT[key_name] = entered_val
                     active_managers.append((val, entered_val))
-        
+
+        async def _run_once() -> "UpdateStats":
+            stats = UpdateStats()
+            _ACTIVE_STATS.set(stats)
+            started = time.monotonic()
+            try:
+                if inspect.iscoroutinefunction(self.main_func):
+                    await self.main_func(**self.kwargs)
+                else:
+                    self.main_func(**self.kwargs)
+            finally:
+                _ACTIVE_STATS.set(None)
+            self.last_stats = stats
+            if report_to_stdout:
+                elapsed = time.monotonic() - started
+                print(
+                    f"[pocketindex] run complete in {elapsed:.2f}s\n{stats}",
+                    flush=True,
+                )
+            return stats
+
         try:
-            # 2. Run main function
-            if inspect.iscoroutinefunction(self.main_func):
-                await self.main_func(**self.kwargs)
-            else:
-                self.main_func(**self.kwargs)
+            # 2. Run main function (once for catch-up, repeatedly for live mode)
+            stats = await _run_once()
+            if live:
+                if report_to_stdout:
+                    print(
+                        f"[pocketindex] entering live mode "
+                        f"(polling every {live_interval:.1f}s; Ctrl+C to stop)",
+                        flush=True,
+                    )
+                try:
+                    while True:
+                        await asyncio.sleep(live_interval)
+                        stats = await _run_once()
+                except (KeyboardInterrupt, asyncio.CancelledError):
+                    if report_to_stdout:
+                        print("[pocketindex] live mode stopped.", flush=True)
+            return stats
         finally:
             # 3. Clean up context managers
             for mgr, entered_val in reversed(active_managers):
@@ -201,9 +282,9 @@ class App:
                     await mgr.__aexit__(None, None, None)
                 except Exception as e:
                     print(f"Error exiting context manager: {e}")
-            
-            if _lifespan_func:
-                try: 
+
+            if gen is not None:
+                try:
                     await gen.__anext__()
                 except StopAsyncIteration:
                     pass

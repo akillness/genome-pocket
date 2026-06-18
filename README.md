@@ -1,6 +1,6 @@
 # genome-pocket 🧬
 
-[![Build Status](https://github.com/username/genome-pocket/actions/workflows/ci.yml/badge.svg)](https://github.com/username/genome-pocket/actions)
+[![Build Status](https://github.com/akillness/genome-pocket/actions/workflows/ci.yml/badge.svg)](https://github.com/akillness/genome-pocket/actions)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python Version](https://img.shields.io/badge/python-3.12%2B-blue.svg)](https://www.python.org/downloads/)
 [![Self-contained engine](https://img.shields.io/badge/engine-self--contained-green.svg)](#-concept--architecture)
@@ -20,10 +20,10 @@ Sequence your knowledge. Carry the whole map in your pocket.
 Pocket operates on the core mental model of **Target = F(Source)**. All data processing is incremental ($\Delta$-only), ensuring that only modified files are reprocessed, and deleted files are automatically cleaned up from the database.
 
 ### Core Workflow — Source → Refine → Load → Serve
-1. **Source (LocalFS):** Watches a local directory (e.g., `./notes`) for Markdown/text files.
-2. **Refine (data cleaning):** `TextRefiner` normalizes raw content (Unicode NFC, CRLF→LF, trailing/duplicate whitespace, excess blank lines) while keeping an offset map so lineage still points at the original source bytes.
+1. **Source (LocalFS):** Watches a local directory (e.g., `./notes`) for Markdown/text files **and recognized source-code files** (`.py`, `.rs`, `.ts`/`.js`, `.go`, `.java`, ...).
+2. **Refine (data cleaning):** `TextRefiner` normalizes raw content (Unicode NFC, CRLF→LF, trailing/duplicate whitespace, excess blank lines) while keeping an offset map so lineage still points at the original source bytes. For code files it switches to an **indentation-preserving** pass so block structure (e.g. Python indentation) survives into the index.
 3. **Transformation (PocketIndex Pipeline):**
-   - Splits refined text into chunks using `RecursiveSplitter`.
+   - Splits refined text into chunks using `RecursiveSplitter`. The splitter is **code-aware**: `detect_code_language()` maps the filename to a language and the splitter prefers that language's structural boundaries (class/def/fn/...), falling back to a recursive paragraph→sentence→line→word→char split for prose. `SeparatorSplitter` and `CustomLanguageConfig` are available for custom formats.
    - Generates embeddings using a local `SentenceTransformer` model (`all-MiniLM-L6-v2`).
    - Generates stable, deterministic IDs using `IdGenerator` to ensure lineage and idempotency.
 4. **Load (SQLite + sqlite-vec + FTS5):** Stores chunk text, embeddings, and lineage metadata (file path, start/end offsets) in a local SQLite database. The same load mirrors chunk text into an FTS5 index so the target supports both vector and lexical (BM25) search.
@@ -78,7 +78,7 @@ genome-pocket/
 ### 2. Installation
 Clone the repository and install in editable mode:
 ```bash
-git clone https://github.com/username/genome-pocket.git
+git clone https://github.com/akillness/genome-pocket.git
 cd genome-pocket
 uv venv
 source .venv/bin/activate
@@ -107,9 +107,20 @@ Run in catch-up mode (processes all pending changes and exits):
 pocket update
 ```
 
-Run in live mode (watches for file changes in real-time):
+Run in live mode (watches for file changes in real-time, re-indexing on a polling interval):
 ```bash
-pocket update -L
+pocket update -L                  # poll every 2s (default)
+pocket update -L --interval 5     # poll every 5s
+```
+
+Every pass prints per-component processing statistics (adds / reprocesses /
+unchanged / deletes / errors) so you can monitor and cross-check what the
+incremental engine actually did against your logs:
+
+```text
+[pocketindex] run complete in 0.23s
+  process_file: adds=1 reprocesses=0 unchanged=1 deletes=0 errors=0 in_progress=0
+  total: adds=1 reprocesses=0 unchanged=1 deletes=0 errors=0 in_progress=0
 ```
 
 #### Search the Knowledge Base

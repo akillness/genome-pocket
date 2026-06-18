@@ -28,10 +28,16 @@ def init():
 
 @cli.command()
 @click.option("-L", "--live", is_flag=True, help="Run in live mode (watch for changes)")
-def update(live):
+@click.option(
+    "--interval",
+    default=2.0,
+    type=float,
+    help="Polling interval (seconds) between live-mode passes.",
+)
+def update(live, interval):
     """Run the indexing pipeline to process notes."""
     click.echo(f"Starting indexing pipeline (live={live})...")
-    
+
     # Create the app using the default environment (which has the lifespan registered)
     app = pix.App(
         "pocket",
@@ -39,10 +45,21 @@ def update(live):
         sourcedir=POCKET_SOURCE_DIR,
         db_path=POCKET_SQLITE_DB,
     )
-    
-    # Run the update
-    app.update_blocking(live=live, report_to_stdout=True)
-    click.echo("Indexing pipeline completed.")
+
+    # Run the update. The engine prints per-component stats after each pass.
+    stats = app.update_blocking(
+        live=live, report_to_stdout=True, live_interval=interval
+    )
+    if stats is not None and not live:
+        total = stats.total
+        click.echo(
+            "Indexing pipeline completed: "
+            f"{total.num_adds} added, {total.num_reprocesses} reprocessed, "
+            f"{total.num_unchanged} unchanged, {total.num_deletes} deleted, "
+            f"{total.num_errors} errors."
+        )
+    else:
+        click.echo("Indexing pipeline completed.")
 
 @cli.command()
 @click.argument("query")

@@ -62,7 +62,17 @@ class TextRefiner:
       * Strip leading/trailing whitespace of the whole document.
     """
 
-    def refine(self, text: str) -> RefinedDocument:
+    def refine(self, text: str, code: bool = False) -> RefinedDocument:
+        """Refine raw text into a cleaned, lineage-preserving document.
+
+        When ``code`` is True the refinement is *indentation-preserving*: inline
+        runs of spaces/tabs are kept verbatim (so code structure like Python
+        block indentation survives), while trailing-whitespace stripping,
+        line-ending normalization, and excess-blank-line collapsing still apply.
+        Code-aware splitting depends on this -- collapsing indentation would
+        destroy the very ``\\n    def`` / ``\\n\\tfn`` boundaries the splitter
+        keys on.
+        """
         if not text:
             return RefinedDocument(text="", offset_map=[])
 
@@ -122,9 +132,16 @@ class TextRefiner:
                 if trailing:
                     i = j
                     continue
-                # Inline whitespace run -> collapse to a single space.
-                out_chars.append(" ")
-                out_offsets.append(nl_offsets[i])
+                # Inline whitespace run. In code mode keep it verbatim so
+                # indentation and intra-line spacing survive; otherwise collapse
+                # the run to a single space.
+                if code:
+                    for k in range(i, j):
+                        out_chars.append(nl_chars[k])
+                        out_offsets.append(nl_offsets[k])
+                else:
+                    out_chars.append(" ")
+                    out_offsets.append(nl_offsets[i])
                 i = j
                 continue
             if ch == "\n":
@@ -132,7 +149,10 @@ class TextRefiner:
                 # i.e. at most two consecutive newlines.
                 j = i
                 newline_count = 0
-                while j < m and nl_chars[j] in ("\n", " ", "\t"):
+                while j < m and (
+                    nl_chars[j] == "\n"
+                    or (not code and nl_chars[j] in (" ", "\t"))
+                ):
                     if nl_chars[j] == "\n":
                         newline_count += 1
                     j += 1

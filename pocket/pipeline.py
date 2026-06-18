@@ -8,7 +8,7 @@ import pocketindex as pix
 from pocketindex.connectors import localfs, sqlite
 from pocketindex.ops.sentence_transformers import SentenceTransformerEmbedder
 from pocketindex.resources.file import FileLike
-from pocketindex.ops.text import RecursiveSplitter
+from pocketindex.ops.text import RecursiveSplitter, detect_code_language
 from pocketindex.ops.refine import TextRefiner
 from pocketindex.resources.id import IdGenerator
 from pocketindex.resources.chunk import Chunk
@@ -65,11 +65,18 @@ async def process_chunk(
 @pix.fn(memo=True)
 async def process_file(file: FileLike, table: sqlite.TableTarget[ChunkEmbedding]) -> None:
     raw_text = await file.read_text()
+    # Detect whether this is source code from its filename. Code files get an
+    # indentation-preserving refine pass and language-aware (structural)
+    # splitting; prose/markdown keeps the original whitespace-collapsing path.
+    language = detect_code_language(filename=file.file_path.path.name)
+    is_code = language is not None and language not in ("markdown", "html")
     # Refinement stage: normalize/clean the raw source before chunking. The
     # refined document keeps an offset map so chunk lineage still points at the
     # original source bytes the user can open.
-    refined = _refiner.refine(raw_text)
-    chunks = _splitter.split(refined.text, chunk_size=1000, chunk_overlap=200)
+    refined = _refiner.refine(raw_text, code=is_code)
+    chunks = _splitter.split(
+        refined.text, chunk_size=1000, chunk_overlap=200, language=language
+    )
     # Translate each chunk's offsets from refined-text space back to original
     # source space so stored lineage references real file positions.
     for chunk in chunks:

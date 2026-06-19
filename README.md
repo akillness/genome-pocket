@@ -25,6 +25,7 @@ Pocket operates on the core mental model of **Target = F(Source)**. All data pro
 3. **Transformation (PocketIndex Pipeline):**
    - Splits refined text into chunks using `RecursiveSplitter`. The splitter is **code-aware**: `detect_code_language()` maps the filename to a language and the splitter prefers that language's structural boundaries (class/def/fn/...), falling back to a recursive paragraph→sentence→line→word→char split for prose. `SeparatorSplitter` and `CustomLanguageConfig` are available for custom formats.
    - Generates embeddings using a local `SentenceTransformer` model (`Qwen/Qwen3-Embedding-0.6B` by default, 1024-d; override with `EMBEDDING_MODEL`). Instruction-aware models apply their asymmetric query/document prompts automatically.
+   - **Optional multimodal (image) search:** set `EMBEDDING_MODEL=google/siglip2-base-patch16-224` to use the Apache-2.0 SigLIP2 backend, which embeds both text and images into one shared space. Image files (`.png/.jpg/.jpeg/.webp/.gif/.bmp/.tiff`) in your notes are then indexed (one vector per image) and become searchable with plain text queries through the same hybrid path. Install the extra with `pip install -e ".[multimodal]"`.
    - Generates stable, deterministic IDs using `IdGenerator` to ensure lineage and idempotency.
 4. **Load (SQLite + sqlite-vec + FTS5):** Stores chunk text, embeddings, and lineage metadata (file path, start/end offsets) in a local SQLite database. The same load mirrors chunk text into an FTS5 index so the target supports both vector and lexical (BM25) search.
 5. **Serve (hybrid retrieval):** A single retrieval layer (`pocket/retrieval.py`) fuses vector + lexical results via Reciprocal Rank Fusion and is exposed three ways:
@@ -92,6 +93,7 @@ Create a `.env` file in the root directory:
 POCKET_SOURCE_DIR=./notes
 POCKET_SQLITE_DB=./.pocket/pocket_data.db
 EMBEDDING_MODEL=Qwen/Qwen3-Embedding-0.6B   # 1024-d default; any SentenceTransformer id works (e.g. all-MiniLM-L6-v2)
+# EMBEDDING_MODEL=google/siglip2-base-patch16-224  # opt-in multimodal: also indexes & searches images (needs `.[multimodal]`)
 
 # --- Optional: knowledge-graph branch (GraphRAG, POCKET-404) ---
 # Off by default; the pipeline is exactly the vector/lexical path until enabled.
@@ -104,6 +106,11 @@ POCKET_GRAPH_MIN_CONFIDENCE=0.0     # facts below this are staged for HITL revie
 > **Changing `EMBEDDING_MODEL`** changes the vector dimension. The source
 > fingerprint folds in the active model, so the next `pocket update` automatically
 > re-embeds every note at the new dimension — no manual reindex or DB wipe needed.
+> **Multimodal (image) search** is opt-in via a SigLIP2 `EMBEDDING_MODEL`
+> (e.g. `google/siglip2-base-patch16-224`). With it active, image files in your
+> notes are embedded into the same space as text, so `pocket search "a red diagram"`
+> can return an image. Switching to/from a SigLIP2 model changes the dimension and
+> re-embeds automatically, just like any other model change.
 
 
 ### 4. Usage

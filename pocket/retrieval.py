@@ -50,18 +50,31 @@ class RetrievalHit:
 
 
 @lru_cache(maxsize=4)
-def _get_model(model_name: str) -> SentenceTransformer:
-    """Cache the embedding model so repeated queries don't reload weights."""
+def _get_model(model_name: str):
+    """Cache the embedding model so repeated queries don't reload weights.
+
+    Returns a multimodal :class:`SiglipEmbedder` for siglip2 ids (so a text query
+    is encoded into the shared image/text space), or a plain SentenceTransformer
+    for text models.
+    """
+    from pocketindex.ops.siglip_embedder import SiglipEmbedder, is_siglip_model
+
+    if is_siglip_model(model_name):
+        return SiglipEmbedder(model_name)
     return SentenceTransformer(model_name)
 
 
-def _encode_query(model: SentenceTransformer, text: str):
-    """Encode query-side text, using the model's instruction prompt when present.
+def _encode_query(model, text: str):
+    """Encode query-side text into the index's vector space.
 
-    Instruction-aware models (e.g. Qwen3-Embedding) define a ``query`` prompt that
-    must wrap the query for the asymmetric retrieval recipe; symmetric models such
-    as all-MiniLM expose no prompts and are encoded plainly.
+    - Multimodal SigLIP2 (``encode_query``): text -> shared image/text space so the
+      query can match stored image embeddings.
+    - Instruction-aware text models (e.g. Qwen3-Embedding) define a ``query`` prompt
+      that must wrap the query for the asymmetric retrieval recipe.
+    - Symmetric models such as all-MiniLM expose no prompts and are encoded plainly.
     """
+    if hasattr(model, "encode_query"):
+        return model.encode_query(text)
     kwargs = {"normalize_embeddings": True}
     if "query" in (getattr(model, "prompts", None) or {}):
         kwargs["prompt_name"] = "query"

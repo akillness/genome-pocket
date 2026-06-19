@@ -12,6 +12,19 @@ by installing it in an isolated venv and diffing its public API against the
 vendored `pocketindex` engine.
 
 ### Added
+- **Multimodal image embedding via SigLIP2 (opt-in).** A new transformers-native
+  `SiglipEmbedder` (`pocketindex/ops/siglip_embedder.py`) maps text *and* images
+  into SigLIP2's shared, L2-normalized space, so a text query matches stored image
+  embeddings through the existing sqlite-vec single-vector + RRF path — no
+  reranker or multi-vector machinery required. Enabled by setting
+  `EMBEDDING_MODEL=google/siglip2-base-patch16-224` (any `siglip2` id); the default
+  text-only path is unchanged. The `localfs` connector now lists image files
+  (`.png/.jpg/.jpeg/.webp/.gif/.bmp/.tiff`); the pipeline routes them to a
+  single-row, no-split image embedding pass *only* when the active embedder
+  advertises `supports_image`, and the memo fingerprint hashes image bytes so an
+  edited image re-embeds. Graph extraction stays text-only. Heavy deps
+  (`transformers`/`torch`/`Pillow`) install via the new `multimodal` extra and are
+  imported lazily, keeping the base install text-only. SigLIP2 is Apache-2.0.
 - **Run statistics / monitoring (POCKET-401).** New `pocketindex/stats.py`
   (`UpdateStats` / `ComponentStats`) tracks adds / reprocesses / unchanged /
   deletes / errors per component. Stats are threaded through `mount_each` and
@@ -44,7 +57,20 @@ vendored `pocketindex` engine.
   (POCKET-404a).** `pocket update --graph` (or `POCKET_GRAPH=1`) now extracts a
   SQLite-resident knowledge graph alongside the vector/lexical index. New
   `pocketindex/ops/extract.py` turns chunks into `(entities, relations)` behind one
-  `ExtractionModel` protocol with three **local** backends — `DeterministicExtractor`
+### Added
+- **Multimodal image embedding via SigLIP2 (opt-in).** A new transformers-native
+  `SiglipEmbedder` (`pocketindex/ops/siglip_embedder.py`) maps text *and* images
+  into SigLIP2's shared, L2-normalized space, so a text query matches stored image
+  embeddings through the existing sqlite-vec single-vector + RRF path — no
+  reranker or multi-vector machinery required. Enabled by setting
+  `EMBEDDING_MODEL=google/siglip2-base-patch16-224` (any `siglip2` id); the default
+  text-only path is unchanged. The `localfs` connector now lists image files
+  (`.png/.jpg/.jpeg/.webp/.gif/.bmp/.tiff`); the pipeline routes them to a
+  single-row, no-split image embedding pass *only* when the active embedder
+  advertises `supports_image`, and the memo fingerprint hashes image bytes so an
+  edited image re-embeds. Graph extraction stays text-only. Heavy deps
+  (`transformers`/`torch`/`Pillow`) install via the new `multimodal` extra and are
+  imported lazily, keeping the base install text-only. SigLIP2 is Apache-2.0.
   (default; no LLM, no network, no heavy deps, so the whole graph path is
   offline-testable), `OllamaExtractor` (local daemon), and **`AirLLMExtractor`**
   (in-process airLLM; an optional `genome-pocket[airllm]` extra that layer-shards a

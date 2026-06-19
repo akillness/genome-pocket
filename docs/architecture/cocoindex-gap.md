@@ -52,7 +52,8 @@ correctness bugs and block several planned features.
 | T1 | `SentenceTransformerEmbedder` downloads model on first import | `MockEmbedder` returning deterministic fixed-dim zeros | ✅ done (`tests/conftest.py`) |
 | T2 | No unit tests for `pocketindex/` internals | Engine reconciliation/abort covered via pipeline tests | ✅ done (`tests/test_pipeline.py`) |
 | T3 | No fingerprint integration tests | `_compute_memo_hash` exercised by `test_incremental_memoization` | ✅ done |
-| T4 | Graph tests require a real pipeline run | Add `tests/test_graph_unit.py` with `DeterministicExtractor` + in-memory SQLite | ⏳ open |
+| T4 | Graph tests require a real pipeline run | `tests/test_graph_unit.py` — DeterministicExtractor + in-memory SQLite, no pipeline run needed | ✅ done |
+
 | T5 | `pytest` not in dev dependencies | Added via `uv add --dev pytest`; needs `uv.lock` commit | ✅ done |
 | T6 | FTS5 lexical index orphan reconciliation untested | `test_fts_index_reconciles_on_edit_and_delete` asserts BM25 stays in lockstep on edit/delete | ✅ done |
 

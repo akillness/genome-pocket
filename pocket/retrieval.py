@@ -22,7 +22,6 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 import sqlite_vec
-from sentence_transformers import SentenceTransformer
 
 import pocket.config as config
 
@@ -53,15 +52,15 @@ class RetrievalHit:
 def _get_model(model_name: str):
     """Cache the embedding model so repeated queries don't reload weights.
 
-    Returns a multimodal :class:`SiglipEmbedder` for siglip2 ids (so a text query
-    is encoded into the shared image/text space), or a plain SentenceTransformer
-    for text models.
+    Delegates model-type selection to the shared embedder registry
+    (:func:`pocketindex.ops.sentence_transformers.resolve_backend`) so the query
+    side can never drift from the ingestion side. Returns a multimodal
+    :class:`SiglipEmbedder` for siglip2 ids (so a text query is encoded into the
+    shared image/text space), or a plain SentenceTransformer for text models.
     """
-    from pocketindex.ops.siglip_embedder import SiglipEmbedder, is_siglip_model
+    from pocketindex.ops.sentence_transformers import resolve_backend
 
-    if is_siglip_model(model_name):
-        return SiglipEmbedder(model_name)
-    return SentenceTransformer(model_name)
+    return resolve_backend(model_name).query_model(model_name)
 
 
 def _encode_query(model, text: str):

@@ -11,7 +11,11 @@ import tempfile
 
 import pocketindex as pix
 from pocketindex.connectors import localfs
-from pocketindex.ops.sentence_transformers import build_embedder
+from pocketindex.ops.sentence_transformers import (
+    EMBEDDER_BACKENDS,
+    build_embedder,
+    resolve_backend,
+)
 from pocketindex.ops.siglip_embedder import SiglipEmbedder, is_siglip_model
 from pocketindex.resources.file import FileLike, is_image_path
 
@@ -37,6 +41,22 @@ def test_build_embedder_text_model_has_no_image_support():
     emb = build_embedder("all-MiniLM-L6-v2")
     assert not isinstance(emb, SiglipEmbedder)
     assert getattr(emb, "supports_image", False) is False
+
+
+def test_registry_is_ordered_with_text_catch_all_last():
+    # The registry is the single dispatch source for both ingestion and
+    # retrieval; the final entry must be the catch-all that accepts any id.
+    assert len(EMBEDDER_BACKENDS) >= 2
+    assert EMBEDDER_BACKENDS[-1].matches("literally-anything")
+    assert EMBEDDER_BACKENDS[-1].matches("Qwen/Qwen3-Embedding-0.6B")
+
+
+def test_resolve_backend_picks_first_match():
+    assert resolve_backend("google/siglip2-base-patch16-224").name == "siglip2-multimodal"
+    assert resolve_backend("all-MiniLM-L6-v2").name == "sentence-transformers-text"
+    # build_embedder is just the registry's indexer factory.
+    assert isinstance(resolve_backend("google/siglip2-base-patch16-224").indexer("google/siglip2-base-patch16-224"), SiglipEmbedder)
+
 
 
 def test_image_extension_detection():

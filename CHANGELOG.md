@@ -60,6 +60,20 @@ vendored `pocketindex` engine.
   byte-for-byte unchanged — zero new cost or dependency for existing users.
 
 ### Changed
+- **Default embedding model → `Qwen/Qwen3-Embedding-0.6B` (POCKET-405).** Replaces
+  `all-MiniLM-L6-v2` (384-d) with the Apache-2.0 Qwen3-Embedding-0.6B (1024-d),
+  a 2026 open-weight MTEB-leading retriever. Both the indexing path
+  (`SentenceTransformerEmbedder`) and the query path (`pocket.retrieval`) now apply
+  the model's asymmetric prompt registry — documents use the empty `document`
+  prompt, queries are wrapped in the `query` instruction — while symmetric models
+  with no prompts (e.g. MiniLM) keep encoding plainly, so the swap is fully
+  backward compatible. Override with `EMBEDDING_MODEL=...` as before.
+- **Embedding-model-aware memoization.** The source fingerprint
+  (`_compute_memo_hash`) now folds in the active embedding signature
+  (`POCKET_EMBED_SIG`, set from `EMBEDDING_MODEL`). Switching models invalidates
+  every memo so unchanged sources are re-embedded at the new vector dimension on
+  the next `pocket update`, instead of leaving stale mixed-dimension vectors that
+  would break `vec_distance_cosine`.
 - **Indentation-preserving refine path.** `TextRefiner.refine(text, code=True)`
   preserves inline whitespace and indentation for code files (prose still
   collapses runs of whitespace), so block structure such as Python indentation

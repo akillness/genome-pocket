@@ -11,7 +11,12 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # Configuration values
 POCKET_SOURCE_DIR = Path(os.getenv("POCKET_SOURCE_DIR", str(BASE_DIR / "notes")))
 POCKET_SQLITE_DB = Path(os.getenv("POCKET_SQLITE_DB", str(BASE_DIR / ".pocket" / "pocket_data.db")))
-EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "all-MiniLM-L6-v2")
+EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "Qwen/Qwen3-Embedding-0.6B")
+# Expose the resolved embedding model to the lower-level pocketindex memo layer
+# (which only reads env, staying decoupled from pocket.config). Folding the model
+# into the source fingerprint means changing EMBEDDING_MODEL automatically
+# invalidates memos and forces a clean re-embed at the new vector dimension.
+os.environ["POCKET_EMBED_SIG"] = EMBEDDING_MODEL
 
 # --- Knowledge-graph (GraphRAG) configuration (POCKET-404) ---
 # The graph branch is opt-in: only when POCKET_GRAPH is truthy (or `pocket update

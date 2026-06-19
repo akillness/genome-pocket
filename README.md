@@ -24,7 +24,7 @@ Pocket operates on the core mental model of **Target = F(Source)**. All data pro
 2. **Refine (data cleaning):** `TextRefiner` normalizes raw content (Unicode NFC, CRLF→LF, trailing/duplicate whitespace, excess blank lines) while keeping an offset map so lineage still points at the original source bytes. For code files it switches to an **indentation-preserving** pass so block structure (e.g. Python indentation) survives into the index.
 3. **Transformation (PocketIndex Pipeline):**
    - Splits refined text into chunks using `RecursiveSplitter`. The splitter is **code-aware**: `detect_code_language()` maps the filename to a language and the splitter prefers that language's structural boundaries (class/def/fn/...), falling back to a recursive paragraph→sentence→line→word→char split for prose. `SeparatorSplitter` and `CustomLanguageConfig` are available for custom formats.
-   - Generates embeddings using a local `SentenceTransformer` model (`all-MiniLM-L6-v2`).
+   - Generates embeddings using a local `SentenceTransformer` model (`Qwen/Qwen3-Embedding-0.6B` by default, 1024-d; override with `EMBEDDING_MODEL`). Instruction-aware models apply their asymmetric query/document prompts automatically.
    - Generates stable, deterministic IDs using `IdGenerator` to ensure lineage and idempotency.
 4. **Load (SQLite + sqlite-vec + FTS5):** Stores chunk text, embeddings, and lineage metadata (file path, start/end offsets) in a local SQLite database. The same load mirrors chunk text into an FTS5 index so the target supports both vector and lexical (BM25) search.
 5. **Serve (hybrid retrieval):** A single retrieval layer (`pocket/retrieval.py`) fuses vector + lexical results via Reciprocal Rank Fusion and is exposed three ways:
@@ -91,7 +91,7 @@ Create a `.env` file in the root directory:
 ```env
 POCKET_SOURCE_DIR=./notes
 POCKET_SQLITE_DB=./.pocket/pocket_data.db
-EMBEDDING_MODEL=all-MiniLM-L6-v2
+EMBEDDING_MODEL=Qwen/Qwen3-Embedding-0.6B   # 1024-d default; any SentenceTransformer id works (e.g. all-MiniLM-L6-v2)
 
 # --- Optional: knowledge-graph branch (GraphRAG, POCKET-404) ---
 # Off by default; the pipeline is exactly the vector/lexical path until enabled.
@@ -100,6 +100,10 @@ POCKET_LLM_PROVIDER=deterministic   # deterministic (offline) | ollama | airllm
 # POCKET_LLM_MODEL=                  # backend-specific model id (optional)
 POCKET_GRAPH_MIN_CONFIDENCE=0.0     # facts below this are staged for HITL review
 ```
+
+> **Changing `EMBEDDING_MODEL`** changes the vector dimension. The source
+> fingerprint folds in the active model, so the next `pocket update` automatically
+> re-embeds every note at the new dimension — no manual reindex or DB wipe needed.
 
 
 ### 4. Usage

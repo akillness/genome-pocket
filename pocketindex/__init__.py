@@ -3,6 +3,7 @@ import asyncio
 import contextvars
 import hashlib
 import inspect
+import os
 import time
 from typing import Any, Callable, Dict, Generic, List, TypeVar, AsyncIterator
 
@@ -103,6 +104,9 @@ async def _compute_memo_hash(value: Any) -> str:
     Uses cocoindex.connectorkits.fingerprint.fingerprint_bytes when available
     (same algorithm as the real cocoindex engine) and falls back to SHA-256.
     File-like inputs are hashed by content so any edit changes the fingerprint.
+    The active embedding signature (``POCKET_EMBED_SIG``) is folded in so that
+    switching the embedding model invalidates every memo and forces a clean
+    re-embed at the new vector dimension instead of leaving stale vectors.
     """
     try:
         if hasattr(value, "read_text"):
@@ -114,6 +118,9 @@ async def _compute_memo_hash(value: Any) -> str:
             payload = repr(value).encode("utf-8")
     except Exception:
         return ""
+    embed_sig = os.getenv("POCKET_EMBED_SIG", "")
+    if embed_sig:
+        payload = embed_sig.encode("utf-8") + b"\x00" + payload
     if _HAVE_COCOINDEX_FP:
         return _fp_bytes(payload).hex()
     return hashlib.sha256(payload).hexdigest()

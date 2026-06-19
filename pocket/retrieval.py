@@ -55,6 +55,19 @@ def _get_model(model_name: str) -> SentenceTransformer:
     return SentenceTransformer(model_name)
 
 
+def _encode_query(model: SentenceTransformer, text: str):
+    """Encode query-side text, using the model's instruction prompt when present.
+
+    Instruction-aware models (e.g. Qwen3-Embedding) define a ``query`` prompt that
+    must wrap the query for the asymmetric retrieval recipe; symmetric models such
+    as all-MiniLM expose no prompts and are encoded plainly.
+    """
+    kwargs = {"normalize_embeddings": True}
+    if "query" in (getattr(model, "prompts", None) or {}):
+        kwargs["prompt_name"] = "query"
+    return model.encode(text, **kwargs)
+
+
 def _connect(db_path: Path) -> sqlite3.Connection:
     conn = sqlite3.connect(str(db_path))
     conn.enable_load_extension(True)
@@ -146,7 +159,7 @@ def search(
 
         if mode in ("hybrid", "vector"):
             model = _get_model(model_name)
-            query_embedding = model.encode(query, normalize_embeddings=True)
+            query_embedding = _encode_query(model, query)
             query_vector = sqlite_vec.serialize_float32(query_embedding)
             vector_rows = _vector_search(conn, query_vector, fetch_n)
 
@@ -346,7 +359,7 @@ def graph_neighborhood(
         if row is None:
             model = _get_model(model_name)
             qv = sqlite_vec.serialize_float32(
-                model.encode(entity, normalize_embeddings=True)
+                _encode_query(model, entity)
             )
             row = conn.execute(
                 "SELECT id, name, type, aliases, confidence, source_file, "

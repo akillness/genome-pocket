@@ -109,7 +109,11 @@ async def _compute_memo_hash(value: Any) -> str:
     re-embed at the new vector dimension instead of leaving stale vectors.
     """
     try:
-        if hasattr(value, "read_text"):
+        if getattr(value, "is_image", False) and hasattr(value, "read_bytes"):
+            # Binary image source: fingerprint raw bytes (read_text would fail on
+            # non-UTF-8 content) so an edited image re-embeds.
+            payload = value.read_bytes()
+        elif hasattr(value, "read_text"):
             text = value.read_text()
             if inspect.isawaitable(text):
                 text = await text

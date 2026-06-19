@@ -7,7 +7,7 @@ from numpy.typing import NDArray
 
 import pocketindex as pix
 from pocketindex.connectors import localfs, sqlite
-from pocketindex.ops.sentence_transformers import SentenceTransformerEmbedder
+from pocketindex.ops.sentence_transformers import SentenceTransformerEmbedder, build_embedder
 from pocketindex.resources.file import FileLike
 from pocketindex.ops.text import RecursiveSplitter, detect_code_language
 from pocketindex.ops.refine import TextRefiner
@@ -69,8 +69,9 @@ _refiner = TextRefiner()
 @pix.lifespan
 async def pocket_lifespan(builder: pix.EnvironmentBuilder) -> AsyncIterator[None]:
     import os
-    # Provide the SentenceTransformerEmbedder
-    builder.provide(EMBEDDER, SentenceTransformerEmbedder(config.EMBEDDING_MODEL))
+    # Provide the embedder backend for the active model (text-only
+    # SentenceTransformer, or multimodal SigLIP2 when a siglip2 id is selected).
+    builder.provide(EMBEDDER, build_embedder(config.EMBEDDING_MODEL))
     # Provide the SQLite ManagedConnection
     db_path = os.getenv("POCKET_SQLITE_DB") or str(config.POCKET_SQLITE_DB)
     builder.provide_with(SQLITE_DB, sqlite.managed_connection(db_path, load_vec=True))
@@ -116,6 +117,31 @@ async def process_chunk(
 
 @pix.fn(memo=True)
 async def process_file(file: FileLike, table: sqlite.TableTarget[ChunkEmbedding]) -> None:
+    # Image files take the multimodal path when the active embedder supports it;
+    # otherwise (text-only model) the image source is seen for lineage but emits
+    # no rows. Routing here (not as a second mount_each) keeps a single sweep over
+    # the shared `embeddings` target so neither modality garbage-collects the other.
+    if getattr(file, "is_image", False):
+        embedder = pix.use_context(EMBEDDER)
+        if not getattr(embedder, "supports_image", False):
+            return
+        filename = file.file_path.path
+        # An image is one atomic unit (no refine/split) -> exactly one row whose
+        # vector is the SigLIP2 image embedding. `text` is the relative path so the
+        # hit still has a lexical handle and a lineage citation.
+        embedding = await embedder.embed_image(filename)
+        id_gen = IdGenerator()
+        path_str = str(filename)
+        table.declare_row(row=ChunkEmbedding(
+            id=await id_gen.next_id(path_str),
+            file_path=path_str,
+            text=path_str,
+            embedding=embedding,
+            start_offset=0,
+            end_offset=0,
+        ))
+        return
+
     raw_text = await file.read_text()
     # Detect whether this is source code from its filename. Code files get an
     # indentation-preserving refine pass and language-aware (structural)
@@ -279,7 +305,12 @@ async def app_main(
             table_name="relations",
             table_schema=await sqlite.TableSchema.from_class(RelationEdge, primary_key=["id"]),
         )
-        graph_items = files.items()
+        # Graph extraction is text-only; images have no read_text() path, so they
+        # are excluded from the entity/relation pass.
+        graph_items = {
+            k: v for k, v in files.items().items()
+            if not getattr(v, "is_image", False)
+        }
         # The graph pass's primary lineage/memo target is `entities`; relations are
         # driven manually inside the component and swept here afterwards.
         await pix.mount_each(

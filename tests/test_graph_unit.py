@@ -17,7 +17,7 @@ from pocketindex.ops.extract import (
     build_extractor,
     parse_extraction_json,
 )
-from pocketindex.ops.entity_resolution import resolve_entities
+from pocketindex.ops.entity_resolution import MergeRecord, resolve_entities
 
 
 class TestGraphExtraction(unittest.TestCase):
@@ -87,6 +87,65 @@ class TestGraphExtraction(unittest.TestCase):
         self.assertEqual(len(resolve_entities(ents, embeds)), 2)
         merged = resolve_entities(ents, embeds, adjudicator=lambda a, b: True)
         self.assertEqual(len(merged), 1)
+        self.assertEqual(len(merged), 1)
+
+
+class TestEntityResolutionRationale(unittest.TestCase):
+    """POCKET-404c: merges carry an auditable rationale for verifiability."""
+
+    def test_exact_name_merge_records_rationale(self):
+        ents = [
+            ExtractedEntity(name="SQLite", type="Tool", confidence=0.9),
+            ExtractedEntity(name="sqlite", type="Tool", confidence=0.5),
+        ]
+        # No embeddings: the exact normalized-name block drives the merge.
+        [cluster] = resolve_entities(ents)
+        self.assertEqual(len(cluster.merges), 1)
+        rec = cluster.merges[0]
+        self.assertEqual(rec.method, "exact_name")
+        self.assertEqual(rec.kept, "SQLite")
+        self.assertEqual(rec.merged, "sqlite")
+        self.assertEqual(rec.similarity, 0.0)
+        self.assertTrue(rec.rationale)
+
+    def test_embedding_merge_records_similarity(self):
+        ents = [
+            ExtractedEntity(name="Vector Store", type="Tool", confidence=0.9),
+            ExtractedEntity(name="VectorStore", type="Tool", confidence=0.5),
+        ]
+        embeds = [[1.0, 0.0, 0.0], [0.999, 0.01, 0.0]]
+        [cluster] = resolve_entities(ents, embeds)
+        rec = next(m for m in cluster.merges if m.method == "embedding")
+        self.assertGreaterEqual(rec.similarity, 0.92)
+        self.assertIn("cosine", rec.rationale)
+
+    def test_llm_adjudicator_rationale_is_persisted(self):
+        ents = [
+            ExtractedEntity(name="Knowledge Graph", type="Concept", confidence=0.7),
+            ExtractedEntity(name="KG", type="Concept", confidence=0.7),
+        ]
+        embeds = [[1.0, 0.0, 0.0], [0.7, 0.7, 0.0]]
+        adj = lambda a, b: (True, "KG is the standard abbreviation")
+        [cluster] = resolve_entities(ents, embeds, adjudicator=adj)
+        rec = next(m for m in cluster.merges if m.method == "llm")
+        self.assertEqual(rec.rationale, "KG is the standard abbreviation")
+
+    def test_no_merge_yields_empty_trail(self):
+        ents = [
+            ExtractedEntity(name="Pocket", type="Tool", confidence=0.9),
+            ExtractedEntity(name="Postgres", type="Tool", confidence=0.9),
+        ]
+        embeds = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]
+        for cluster in resolve_entities(ents, embeds):
+            self.assertEqual(cluster.merges, [])
+
+    def test_merge_record_is_json_serializable(self):
+        import json
+        from dataclasses import asdict
+
+        rec = MergeRecord(kept="A", merged="a", method="exact_name", rationale="x")
+        payload = json.dumps([asdict(rec)])
+        self.assertEqual(json.loads(payload)[0]["kept"], "A")
 
 
 class TestGraphTargetUnit(unittest.TestCase):
@@ -168,6 +227,19 @@ class TestGraphTargetUnit(unittest.TestCase):
                         "SELECT COUNT(*) FROM relations"
                     ).fetchone()[0]
                     assert rel_count > 0, "expected at least one relation"
+                    # POCKET-404c: the resolution column round-trips through the
+                    # target schema and always holds a valid JSON merge trail
+                    # (empty here since the deterministic extractor dedups within
+                    # a chunk; non-empty trails are covered by the resolver units).
+                    import json as _json
+                    trails = [
+                        _json.loads(res)
+                        for (res,) in conn.execute(
+                            "SELECT resolution FROM entities"
+                        ).fetchall()
+                    ]
+                    assert trails, "expected resolution rows"
+                    assert all(isinstance(t, list) for t in trails)
                 finally:
                     temp_path.unlink(missing_ok=True)
                     conn.close()

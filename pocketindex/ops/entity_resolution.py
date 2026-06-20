@@ -41,6 +41,22 @@ def cosine(a: Sequence[float], b: Sequence[float]) -> float:
 
 
 @dataclass
+class MergeRecord:
+    """Why two surface forms were folded into one canonical entity (POCKET-404c).
+
+    Persisted alongside the node so a human can audit *why* a merge happened —
+    the verifiability requirement from the spec (§4.2 step 3, §7) grounded in
+    arXiv:2606.01210 (don't trust opaque LLM ER decisions; keep the evidence).
+    """
+
+    kept: str                      # canonical surface form the cluster settled on
+    merged: str                    # surface form folded into the canonical entity
+    method: str                    # "exact_name" | "embedding" | "llm"
+    similarity: float = 0.0        # cosine similarity (0.0 for exact-name matches)
+    rationale: str = ""            # adjudicator explanation (LLM) or a short note
+
+
+@dataclass
 class ResolvedEntity:
     """A merged cluster of surface forms referring to one real entity."""
 
@@ -49,11 +65,25 @@ class ResolvedEntity:
     aliases: List[str] = field(default_factory=list)
     confidence: float = 0.0        # max confidence across members
     members: List[ExtractedEntity] = field(default_factory=list)
+    merges: List[MergeRecord] = field(default_factory=list)  # audit trail
 
 
-# A merge-decision callable: given two entities, return True to merge. Used to
-# inject optional LLM adjudication without coupling the resolver to a model.
-MergeAdjudicator = Callable[[ExtractedEntity, ExtractedEntity], bool]
+# A merge-decision callable: given two entities, decide whether to merge. To
+# support verifiability it may return either a bare ``bool`` or a
+# ``(bool, rationale)`` tuple; the resolver normalizes both. Used to inject
+# optional LLM adjudication without coupling the resolver to a model.
+MergeAdjudicator = Callable[
+    [ExtractedEntity, ExtractedEntity], "bool | tuple[bool, str]"
+]
+
+
+def _normalize_decision(decision: "bool | tuple") -> tuple:
+    """Coerce an adjudicator return into ``(merge: bool, rationale: str)``."""
+    if isinstance(decision, tuple):
+        merge = bool(decision[0])
+        rationale = str(decision[1]) if len(decision) > 1 else ""
+        return merge, rationale
+    return bool(decision), ""
 
 
 class _UnionFind:
@@ -111,10 +141,15 @@ def resolve_entities(
     # Build candidate pairs via blocking.
     candidate_pairs = _candidate_pairs(norms, embeddings, block_threshold, top_k)
 
+    # Record every accepted union with the method + evidence that justified it,
+    # so the final clusters can carry an auditable merge trail (POCKET-404c).
+    accepted: List[tuple] = []  # (i, j, method, similarity, rationale)
+
     for i, j in candidate_pairs:
         # (2) Cheap filters first.
         if norms[i] == norms[j]:
             uf.union(i, j)
+            accepted.append((i, j, "exact_name", 0.0, "identical normalized name"))
             continue
         sim = cosine(embeddings[i], embeddings[j]) if embeddings[i] is not None else 0.0
         types_compatible = (
@@ -124,12 +159,19 @@ def resolve_entities(
         )
         if sim >= auto_merge_threshold and types_compatible:
             uf.union(i, j)
+            accepted.append(
+                (i, j, "embedding", sim, f"cosine {sim:.3f} >= {auto_merge_threshold}")
+            )
             continue
         # (3) Ambiguous: adjudicate only if a decider was injected.
         if sim >= block_threshold and types_compatible and adjudicator is not None:
             try:
-                if adjudicator(entities[i], entities[j]):
+                merge, rationale = _normalize_decision(
+                    adjudicator(entities[i], entities[j])
+                )
+                if merge:
                     uf.union(i, j)
+                    accepted.append((i, j, "llm", sim, rationale or "adjudicated merge"))
             except Exception as exc:  # noqa: BLE001 - degrade, don't crash
                 print(f"[pocketindex.entity_resolution] adjudicator failed: {exc}")
 
@@ -145,6 +187,22 @@ def resolve_entities(
         aliases = sorted(
             {m.name for m in members if m.name != canonical.name}
         )
+        # Attribute each accepted union whose endpoints landed in this cluster.
+        member_set = set(members_idx)
+        merges: List[MergeRecord] = []
+        for i, j, method, sim, rationale in accepted:
+            if i in member_set and j in member_set:
+                folded = entities[j].name if entities[j].name != canonical.name else entities[i].name
+                merges.append(
+                    MergeRecord(
+                        kept=canonical.name,
+                        merged=folded,
+                        method=method,
+                        similarity=round(float(sim), 4),
+                        rationale=rationale,
+                    )
+                )
+        merges.sort(key=lambda m: (m.merged.lower(), m.method))
         resolved.append(
             ResolvedEntity(
                 name=canonical.name,
@@ -152,6 +210,7 @@ def resolve_entities(
                 aliases=aliases,
                 confidence=max(m.confidence for m in members),
                 members=members,
+                merges=merges,
             )
         )
     # Deterministic ordering for stable downstream ids/tests.
@@ -186,7 +245,6 @@ def _candidate_pairs(
     # Always supplement embedding blocks (or fully substitute, when there are no
     # embeddings) with exact normalized-name groups and a shared-leading-token
     # block, so the resolver works even with no embeddings at all.
-    by_norm: Dict[str, List[int]] = {}
     by_norm: Dict[str, List[int]] = {}
     by_prefix: Dict[str, List[int]] = {}
     for idx, norm in enumerate(norms):

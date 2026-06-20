@@ -12,6 +12,18 @@ by installing it in an isolated venv and diffing its public API against the
 vendored `pocketindex` engine.
 
 ### Added
+- **Auditable entity-resolution merge rationale (POCKET-404c).**
+  `pocketindex/ops/entity_resolution.py` now records *why* each merge happened: every
+  accepted union carries a `MergeRecord` (`kept` / `merged` / `method` ∈
+  `exact_name`|`embedding`|`llm` / `similarity` / `rationale`), and `ResolvedEntity`
+  exposes the per-cluster `merges` audit trail. The optional `MergeAdjudicator` may now
+  return `(bool, rationale)` so an LLM's merge justification is captured, not discarded —
+  the verifiability requirement from arXiv:2606.01210 (don't trust opaque LLM ER
+  decisions). The pipeline serializes the trail into a new `EntityNode.resolution` JSON
+  column so a human can audit a merge through the same end-to-end lineage as nodes/edges.
+  Also fixed a duplicate `by_norm` initialization in the blocking pass. Tests:
+  `TestEntityResolutionRationale` (5) + resolution round-trip assertion in the graph
+  target integration test.
 - **Hardened JSON extraction prompt + extraction memoization (POCKET-404b).**
   `pocketindex/ops/extract.py` now pins the strict-JSON extraction prompt behind a
   `PROMPT_VERSION` constant with explicit JSON-only / grounding / verbatim-evidence /

@@ -1,6 +1,6 @@
 import json
 import pathlib
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict
 from typing import Annotated, AsyncIterator, List, Tuple
 import numpy as np
 from numpy.typing import NDArray
@@ -47,6 +47,7 @@ class EntityNode:
     confidence: float                         # Max extraction confidence
     source_file: str                          # Primary chunk's source file (lineage anchor)
     source_chunk_ids: str                     # JSON list of chunk ids mentioning this entity
+    resolution: str = "[]"                    # JSON merge audit trail (POCKET-404c)
 
 
 @dataclass
@@ -207,6 +208,7 @@ async def extract_graph_file(
             confidence=r.confidence,
             source_file=str(filename),
             source_chunk_ids=json.dumps(chunk_ids),
+            resolution=json.dumps([asdict(m) for m in r.merges]),
         )
         id_to_node[ent_id] = node
         for member in r.members:

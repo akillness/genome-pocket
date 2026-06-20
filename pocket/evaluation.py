@@ -77,9 +77,6 @@ class EvalCase:
     mode: str = "hybrid"
     note: str = ""
 
-    def to_dict(self) -> Dict:
-        return asdict(self)
-
 
 @dataclass
 class CaseResult:
@@ -96,9 +93,6 @@ class CaseResult:
     average_precision: float
     note: str = ""
 
-    def to_dict(self) -> Dict:
-        return asdict(self)
-
 
 @dataclass
 class EvalMetrics:
@@ -114,17 +108,9 @@ class EvalMetrics:
     cases: List[CaseResult] = field(default_factory=list)
 
     def to_dict(self, include_cases: bool = True) -> Dict:
-        d = {
-            "n_cases": self.n_cases,
-            "k": self.k,
-            "hit_rate": self.hit_rate,
-            "mrr": self.mrr,
-            "precision_at_k": self.precision_at_k,
-            "recall_at_k": self.recall_at_k,
-            "mean_average_precision": self.mean_average_precision,
-        }
-        if include_cases:
-            d["cases"] = [c.to_dict() for c in self.cases]
+        d = asdict(self)
+        if not include_cases:
+            d.pop("cases")
         return d
 
 
@@ -159,19 +145,15 @@ def precision_at_k(retrieved: List[str], relevant: List[str], k: int) -> float:
     """Fraction of the top-k retrieved paths that are relevant."""
     if k <= 0:
         return 0.0
-    flags = _relevance_flags(retrieved[:k], relevant)
-    return sum(flags) / k
+    return sum(_relevance_flags(retrieved[:k], relevant)) / k
 
 
 def recall_at_k(retrieved: List[str], relevant: List[str], k: int) -> float:
     """Fraction of the relevant paths that appear in the top-k retrieved."""
     if not relevant:
         return 0.0
-    hit = 0
-    for rel in relevant:
-        if any(_matches(got, rel) for got in retrieved[:k]):
-            hit += 1
-    return hit / len(relevant)
+    found = sum(any(_matches(got, rel) for got in retrieved[:k]) for rel in relevant)
+    return found / len(relevant)
 
 
 def average_precision(retrieved: List[str], relevant: List[str], k: int) -> float:
@@ -396,14 +378,6 @@ class Regression:
     @property
     def delta(self) -> float:
         return self.current - self.baseline
-
-    def to_dict(self) -> Dict:
-        return {
-            "metric": self.metric,
-            "baseline": self.baseline,
-            "current": self.current,
-            "delta": self.delta,
-        }
 
 
 def save_baseline(path: Path, metrics: EvalMetrics) -> None:

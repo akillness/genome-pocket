@@ -169,6 +169,96 @@ class TestRetrievalAndApi(unittest.TestCase):
         r = client.get("/search", params={"q": ""})
         self.assertEqual(r.status_code, 400)
 
+    def test_routing_trace_annotates_strategies_and_contributors(self):
+        from pocket import retrieval
+
+        importlib.reload(retrieval)
+        self._run()
+
+        trace = retrieval.routing_trace("deletion propagation", mode="hybrid")
+        self.assertEqual(trace["mode"], "hybrid")
+        by_name = {s["name"]: s for s in trace["strategies"]}
+        self.assertEqual(set(by_name), {"vector", "lexical", "graph"})
+        # Hybrid activates all three; lexical is available (FTS built), graph is
+        # not (this index has no --graph entities table).
+        self.assertTrue(by_name["vector"]["active"])
+        self.assertTrue(by_name["lexical"]["active"])
+        self.assertTrue(by_name["graph"]["active"])
+        self.assertTrue(by_name["lexical"]["available"])
+        self.assertFalse(by_name["graph"]["available"])
+        self.assertEqual(by_name["graph"]["candidates"], 0)
+        self.assertTrue(by_name["vector"]["candidates"] > 0)
+
+        self.assertTrue(trace["results"])
+        # Every hit names the strategies that surfaced it, and no hit claims a
+        # graph contribution since the graph strategy never ran.
+        for hit in trace["results"]:
+            self.assertTrue(hit["contributors"])
+            self.assertNotIn("graph", hit["contributors"])
+            for c in hit["contributors"]:
+                self.assertIn(c, {"vector", "lexical"})
+        contributing = {c for hit in trace["results"] for c in hit["contributors"]}
+        self.assertIn("vector", contributing)
+
+    def test_routing_trace_lexical_mode_routes_only_lexical(self):
+        from pocket import retrieval
+
+        importlib.reload(retrieval)
+        self._run()
+
+        trace = retrieval.routing_trace("deletion", mode="lexical")
+        by_name = {s["name"]: s for s in trace["strategies"]}
+        self.assertTrue(by_name["lexical"]["active"])
+        self.assertFalse(by_name["vector"]["active"])
+        self.assertFalse(by_name["graph"]["active"])
+        # Inactive strategies produce no candidates even though vector is
+        # otherwise available.
+        self.assertEqual(by_name["vector"]["candidates"], 0)
+        self.assertTrue(by_name["lexical"]["candidates"] > 0)
+        self.assertTrue(trace["results"])
+        for hit in trace["results"]:
+            self.assertEqual(hit["contributors"], ["lexical"])
+
+    def test_routing_trace_missing_index_returns_empty(self):
+        from pocket import retrieval
+
+        importlib.reload(retrieval)
+        # No _run(): the DB does not exist yet.
+        trace = retrieval.routing_trace("anything", mode="hybrid")
+        self.assertEqual(trace["results"], [])
+        for s in trace["strategies"]:
+            self.assertFalse(s["available"])
+            self.assertEqual(s["candidates"], 0)
+
+    def test_api_ui_and_trace_endpoints(self):
+        from starlette.testclient import TestClient
+        from pocket.api_server import create_app
+
+        self._run()
+        client = TestClient(create_app())
+
+        r = client.get("/")
+        self.assertEqual(r.status_code, 200)
+        self.assertIn("text/html", r.headers["content-type"])
+        self.assertIn("Query Tracing", r.text)
+
+        r = client.get("/trace", params={"q": "deletion", "mode": "hybrid"})
+        self.assertEqual(r.status_code, 200)
+        body = r.json()
+        self.assertEqual(body["mode"], "hybrid")
+        self.assertTrue(body["results"])
+        self.assertEqual(
+            {s["name"] for s in body["strategies"]},
+            {"vector", "lexical", "graph"},
+        )
+
+        r = client.get("/trace", params={"q": ""})
+        self.assertEqual(r.status_code, 400)
+
+        r = client.get("/trace", params={"q": "x", "mode": "bogus"})
+        self.assertEqual(r.status_code, 400)
+
+
 class TestTextRefiner(unittest.TestCase):
     """Unit tests for the deterministic refinement stage."""
 

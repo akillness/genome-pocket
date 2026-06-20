@@ -12,6 +12,20 @@ by installing it in an isolated venv and diffing its public API against the
 vendored `pocketindex` engine.
 
 ### Added
+- **Local query-tracing & lineage web UI (POCKET-301 slice).** `pocket serve` now
+  serves a single, dependency-free HTML page at `GET /` (`pocket/web_ui.py`) that
+  visualizes *how a query was routed* and *which source files answered it*. A new
+  `retrieval.routing_trace()` is the testable core: it reuses the same
+  `_gather`/`_fuse` orchestration as `search()` (refactored into a shared `_gather`
+  helper plus a `_MODE_STRATEGIES` routing table) and returns, per strategy
+  (`vector`/`lexical`/`graph`), whether the chosen mode *activates* it, whether it
+  is *available* on the target (FTS / graph tables present), and its candidate
+  count — plus the fused hits, each tagged with the `contributors` that surfaced
+  it. Exposed over HTTP as `GET /trace`, and the page lazy-loads per-file chunk
+  lineage via the existing `/lineage` endpoint. No Streamlit/React/build step, in
+  keeping with Pocket's local-first design. Tests: trace strategy/contributor
+  annotation, lexical-mode routing isolation, missing-index empty trace, and the
+  `/` + `/trace` endpoints (4).
 - **Interactive review during `pocket update --graph` (POCKET-301 slice).**
   A new `--review` flag turns the graph build into a human-in-the-loop pass: after
   indexing, `_interactive_graph_review()` (in `pocket/cli.py`) walks the operator

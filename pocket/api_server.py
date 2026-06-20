@@ -6,18 +6,21 @@ speaking the Model Context Protocol. Built on Starlette + uvicorn (already
 pulled in transitively by the MCP dependency) to avoid adding heavy deps.
 
 Endpoints:
+  GET  /                              -> local tracing & lineage web UI (HTML)
   GET  /health                       -> liveness + index status
   GET  /search?q=...&limit=&mode=    -> hybrid/vector/lexical/graph retrieval
   POST /search  {query, limit, mode} -> same, JSON body
+  GET  /trace?q=...&limit=&mode=     -> query-routing trace + contributing chunks
   GET  /lineage?file_path=...        -> per-file chunk lineage
 """
 from starlette.applications import Starlette
 from starlette.requests import Request
-from starlette.responses import JSONResponse
+from starlette.responses import HTMLResponse, JSONResponse
 from starlette.routing import Route
 
 import pocket.config as config
 from pocket import retrieval
+from pocket.web_ui import INDEX_HTML
 
 _VALID_MODES = {"hybrid", "vector", "lexical", "graph"}
 
@@ -98,11 +101,36 @@ async def lineage(request: Request) -> JSONResponse:
     )
 
 
+async def index(request: Request) -> HTMLResponse:
+    """Serve the local tracing & lineage web UI (POCKET-301)."""
+    return HTMLResponse(INDEX_HTML)
+
+
+async def trace(request: Request) -> JSONResponse:
+    """Explain how a query is routed and which chunks each strategy surfaced."""
+    query = request.query_params.get("q", "")
+    if not query or not query.strip():
+        return JSONResponse({"error": "query must not be empty"}, status_code=400)
+    mode = request.query_params.get("mode", "hybrid")
+    if mode not in _VALID_MODES:
+        return JSONResponse(
+            {"error": f"mode must be one of {sorted(_VALID_MODES)}"}, status_code=400
+        )
+    if not _index_exists():
+        return JSONResponse(
+            {"error": "index not built; run 'pocket update' first"}, status_code=503
+        )
+    limit = _coerce_limit(request.query_params.get("limit"))
+    return JSONResponse(retrieval.routing_trace(query, limit=limit, mode=mode))
+
+
 def create_app() -> Starlette:
     """Build the Starlette ASGI application."""
     routes = [
+        Route("/", index, methods=["GET"]),
         Route("/health", health, methods=["GET"]),
         Route("/search", search_endpoint, methods=["GET", "POST"]),
+        Route("/trace", trace, methods=["GET"]),
         Route("/lineage", lineage, methods=["GET"]),
     ]
     return Starlette(routes=routes)

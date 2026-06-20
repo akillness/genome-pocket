@@ -120,6 +120,51 @@ def _lexical_search(conn: sqlite3.Connection, query: str, limit: int) -> List[tu
     except sqlite3.OperationalError:
         return []
 
+# Which strategies each retrieval mode activates. Single source of truth for the
+# router so the CLI, REST API, and tracing UI agree on what "hybrid" means.
+_MODE_STRATEGIES = {
+    "hybrid": ("vector", "lexical", "graph"),
+    "vector": ("vector",),
+    "lexical": ("lexical",),
+    "graph": ("graph",),
+}
+
+
+def _gather(
+    conn: sqlite3.Connection,
+    query: str,
+    mode: str,
+    fetch_n: int,
+    model_name: str,
+) -> tuple:
+    """Run each enabled retrieval strategy and return their raw ranked rows.
+
+    Shared by :func:`search` and :func:`routing_trace` so the routing decision —
+    which strategies run, given the requested ``mode`` and which target tables
+    exist — lives in exactly one place and can never drift between a real search
+    and the trace the UI renders for the same query.
+    """
+    vector_rows: List[tuple] = []
+    lexical_rows: List[tuple] = []
+    graph_rows: List[tuple] = []
+
+    # Both vector search and graph entity-anchoring need the query embedding.
+    query_vector = None
+    if mode in ("hybrid", "vector", "graph"):
+        model = _get_model(model_name)
+        query_embedding = model.encode(query, normalize_embeddings=True)
+        query_vector = sqlite_vec.serialize_float32(query_embedding)
+
+    if mode in ("hybrid", "vector"):
+        vector_rows = _vector_search(conn, query_vector, fetch_n)
+
+    if mode in ("hybrid", "lexical") and _fts_available(conn):
+        lexical_rows = _lexical_search(conn, query, fetch_n)
+
+    if mode in ("hybrid", "graph") and _graph_available(conn):
+        graph_rows = _graph_search(conn, query_vector, fetch_n)
+
+    return vector_rows, lexical_rows, graph_rows
 
 def search(
     query: str,
@@ -146,25 +191,9 @@ def search(
 
     conn = _connect(Path(db_path))
     try:
-        vector_rows: List[tuple] = []
-        lexical_rows: List[tuple] = []
-        graph_rows: List[tuple] = []
-
-        # Both vector search and graph entity-anchoring need the query embedding.
-        query_vector = None
-        if mode in ("hybrid", "vector", "graph"):
-            model = _get_model(model_name)
-            query_embedding = model.encode(query, normalize_embeddings=True)
-            query_vector = sqlite_vec.serialize_float32(query_embedding)
-
-        if mode in ("hybrid", "vector"):
-            vector_rows = _vector_search(conn, query_vector, fetch_n)
-
-        if mode in ("hybrid", "lexical") and _fts_available(conn):
-            lexical_rows = _lexical_search(conn, query, fetch_n)
-
-        if mode in ("hybrid", "graph") and _graph_available(conn):
-            graph_rows = _graph_search(conn, query_vector, fetch_n)
+        vector_rows, lexical_rows, graph_rows = _gather(
+            conn, query, mode, fetch_n, model_name
+        )
     finally:
         conn.close()
 
@@ -215,6 +244,94 @@ def _fuse(
     ranked = sorted(accum.values(), key=lambda h: h.score, reverse=True)
     return ranked[:limit]
 
+
+def routing_trace(
+    query: str,
+    limit: int = 5,
+    db_path: Optional[Path] = None,
+    model_name: Optional[str] = None,
+    mode: str = "hybrid",
+) -> Dict:
+    """Explain how a query is routed and which sources answer it (POCKET-301).
+
+    Returns a JSON-able trace the local tracing UI visualizes:
+
+      * ``strategies`` — for ``vector``/``lexical``/``graph``: whether the
+        chosen ``mode`` *activates* it, whether it is *available* on this target
+        (FTS / graph tables present), and how many candidates it produced.
+      * ``results`` — the fused hits, each annotated with the ``contributors``
+        (the strategies whose ranked list surfaced that chunk).
+
+    It reuses :func:`_gather` and :func:`_fuse`, so the trace can never diverge
+    from a real :func:`search` for the same query/mode.
+    """
+    db_path = db_path or config.POCKET_SQLITE_DB
+    model_name = model_name or config.EMBEDDING_MODEL
+    active = set(_MODE_STRATEGIES.get(mode, ()))
+
+    def _strategies(available: Dict[str, bool], candidates: Dict[str, int]):
+        return [
+            {
+                "name": name,
+                "active": name in active,
+                "available": available[name],
+                "candidates": candidates[name],
+            }
+            for name in ("vector", "lexical", "graph")
+        ]
+
+    zero = {"vector": 0, "lexical": 0, "graph": 0}
+    if not Path(db_path).exists():
+        absent = {"vector": False, "lexical": False, "graph": False}
+        return {
+            "query": query,
+            "mode": mode,
+            "limit": limit,
+            "strategies": _strategies(absent, zero),
+            "results": [],
+        }
+
+    fetch_n = max(limit * 4, limit)
+    conn = _connect(Path(db_path))
+    try:
+        available = {
+            "vector": True,
+            "lexical": _fts_available(conn),
+            "graph": _graph_available(conn),
+        }
+        vector_rows, lexical_rows, graph_rows = _gather(
+            conn, query, mode, fetch_n, model_name
+        )
+    finally:
+        conn.close()
+
+    candidates = {
+        "vector": len(vector_rows),
+        "lexical": len(lexical_rows),
+        "graph": len(graph_rows),
+    }
+    hits = _fuse(vector_rows, lexical_rows, limit, graph_rows)
+
+    results = []
+    for hit in hits:
+        row = hit.to_dict()
+        contributors = []
+        if hit.vector_rank is not None:
+            contributors.append("vector")
+        if hit.lexical_rank is not None:
+            contributors.append("lexical")
+        if hit.graph_rank is not None:
+            contributors.append("graph")
+        row["contributors"] = contributors
+        results.append(row)
+
+    return {
+        "query": query,
+        "mode": mode,
+        "limit": limit,
+        "strategies": _strategies(available, candidates),
+        "results": results,
+    }
 
 def format_hits(hits: List[RetrievalHit]) -> str:
     """Render hits as the human/agent-readable text used by CLI and MCP."""

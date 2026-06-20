@@ -212,6 +212,7 @@ def serve(host, port):
     from pocket.api_server import create_app
 
     click.echo(f"Starting Pocket API server on http://{host}:{port} ...")
+    click.echo(f"  Tracing & lineage UI: http://{host}:{port}/")
     uvicorn.run(create_app(), host=host, port=port)
 
 

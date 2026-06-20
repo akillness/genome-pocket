@@ -207,21 +207,109 @@ def drop(file_path, yes):
     )
 
 
-@cli.command()
+class _DefaultShowGroup(click.Group):
+    """`pocket graph <entity>` keeps working: a leading token that is not a
+    registered subcommand (and not an option) is routed to `graph show`."""
+
+    def resolve_command(self, ctx, args):
+        if args and args[0] not in self.commands and not args[0].startswith("-"):
+            args = ["show"] + list(args)
+        return super().resolve_command(ctx, args)
+
+
+@cli.group(cls=_DefaultShowGroup, invoke_without_command=False)
+def graph():
+    """Knowledge-graph inspection and review.
+
+    `pocket graph <entity>` prints a node's neighborhood; `pocket graph review`
+    manages facts staged by the HITL confidence gate. Requires a graph built
+    with `pocket update --graph`.
+    """
+
+
+@graph.command("show")
 @click.argument("entity")
 @click.option("--limit", default=10, help="Max number of relations to show.")
-def graph(entity, limit):
-    """Print a knowledge-graph entity's neighborhood (relations).
-
-    Requires a graph built with `pocket update --graph`.
-    """
-    from pocket import retrieval
-
+def graph_show(entity, limit):
+    """Print a knowledge-graph entity's neighborhood (relations)."""
     if not POCKET_SQLITE_DB.exists():
         click.echo("Database does not exist. Please run 'pocket update --graph' first.")
         return
     node = retrieval.graph_neighborhood(entity, limit=limit)
     click.echo(retrieval.format_neighborhood(node))
+
+
+@graph.command("review")
+@click.option("--approve", "approve_ids", multiple=True, help="Approve fact id(s).")
+@click.option("--reject", "reject_ids", multiple=True, help="Reject fact id(s).")
+@click.option("--approve-all", is_flag=True, help="Approve every pending fact.")
+@click.option("--reject-all", is_flag=True, help="Reject every pending fact.")
+def graph_review(approve_ids, reject_ids, approve_all, reject_all):
+    """Review facts staged by the confidence gate (POCKET-302).
+
+    With no options, lists the pending facts. Use --approve/--reject <id>
+    (repeatable) for specific facts, or --approve-all/--reject-all in bulk.
+    """
+    from pocket import admin
+
+    if not POCKET_SQLITE_DB.exists():
+        click.echo("Database does not exist. Please run 'pocket update --graph' first.")
+        return
+
+    def _ids(raw):
+        out = []
+        for r in raw:
+            try:
+                out.append(int(r))
+            except ValueError:
+                click.echo(f"Ignoring non-numeric id: {r}")
+        return out
+
+    if approve_all and reject_all:
+        click.echo("Choose one of --approve-all / --reject-all, not both.")
+        return
+
+    acted = False
+    if approve_all:
+        c = admin.approve_pending(ids=None)
+        click.echo(f"Approved {c['entities']} entit(y/ies), {c['relations']} relation(s).")
+        acted = True
+    elif approve_ids:
+        c = admin.approve_pending(ids=_ids(approve_ids))
+        click.echo(f"Approved {c['entities']} entit(y/ies), {c['relations']} relation(s).")
+        acted = True
+    if reject_all:
+        c = admin.reject_pending(ids=None)
+        click.echo(f"Rejected {c['entities']} entit(y/ies), {c['relations']} relation(s).")
+        acted = True
+    elif reject_ids:
+        c = admin.reject_pending(ids=_ids(reject_ids))
+        click.echo(f"Rejected {c['entities']} entit(y/ies), {c['relations']} relation(s).")
+        acted = True
+    if acted:
+        return
+
+    pending = admin.list_pending()
+    ents, rels = pending["entities"], pending["relations"]
+    if not ents and not rels:
+        click.echo("No facts are pending review.")
+        return
+    click.echo(f"Pending entities ({len(ents)}):")
+    for e in ents:
+        click.echo(
+            f"  [{e['id']}] {e['name']} ({e['type']}) "
+            f"conf={e['confidence']:.2f}  {e['source_file']}"
+        )
+    click.echo(f"Pending relations ({len(rels)}):")
+    for r in rels:
+        click.echo(
+            f"  [{r['id']}] {r['subject']} -{r['predicate']}-> {r['object']} "
+            f"conf={r['confidence']:.2f}  {r['source_file']}"
+        )
+    click.echo(
+        "\nApprove with: pocket graph review --approve <id> (or --approve-all); "
+        "reject with --reject <id> / --reject-all."
+    )
 
 if __name__ == "__main__":
     cli()

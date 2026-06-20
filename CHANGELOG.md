@@ -12,6 +12,23 @@ by installing it in an isolated venv and diffing its public API against the
 vendored `pocketindex` engine.
 
 ### Added
+- **Human-in-the-loop graph approval gate (POCKET-302).** Low-confidence graph
+  facts are no longer dropped — they are *staged*. `EntityNode`/`RelationEdge` gain
+  a `status` column (`"approved"` | `"pending"`); the pipeline writes any node/edge
+  below `POCKET_GRAPH_MIN_CONFIDENCE` (or with a staged endpoint) as `pending`
+  instead of committing or discarding it. All graph reads in `pocket/retrieval.py`
+  filter to approved facts via a `_status_clause()` helper (legacy graphs without
+  the column degrade to an always-true predicate), so pending facts never surface
+  in search, neighborhood, or concept listings until a human accepts them. New
+  `pocket/admin.py` review API — `list_pending()`, `approve_pending(ids=None)`,
+  `reject_pending(ids=None)` — is surfaced through a restructured `pocket graph`
+  command group: `pocket graph review` lists/approves/rejects staged facts
+  (`--approve`/`--reject <id>`, `--approve-all`/`--reject-all`), while
+  `pocket graph <entity>` still routes to the neighborhood view for backward
+  compatibility. Matches the uncertainty-guided KG-construction stance
+  (arXiv:2605.26835). Tests: staging vs. commit by threshold, pending facts hidden
+  from retrieval, approve/reject round-trips, specific-id approval, and CLI
+  review + back-compat routing (7).
 - **GraphRAG retrieval — entity-anchored multi-hop fusion (POCKET-404d).**
   `pocket/retrieval.py` adds `_graph_search()`, a third retriever that anchors the query
   to the nearest `entities` by name embedding, traverses one hop over `relations`, and

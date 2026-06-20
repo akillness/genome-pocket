@@ -710,5 +710,151 @@ class TestGraphTarget(unittest.TestCase):
         finally:
             conn.close()
 
+    # --- POCKET-302: human-in-the-loop confidence gate -------------------
+    def _set_min_conf(self, value):
+        """Set the staging threshold and reload the graph modules so the
+        pipeline gate, retrieval filters, and admin review all see it."""
+        os.environ["POCKET_GRAPH_MIN_CONFIDENCE"] = str(value)
+        self.addCleanup(os.environ.pop, "POCKET_GRAPH_MIN_CONFIDENCE", None)
+        if "pocket.config" in sys.modules:
+            importlib.reload(sys.modules["pocket.config"])
+        for mod in ("pocket.pipeline", "pocket.retrieval", "pocket.admin"):
+            if mod in sys.modules:
+                importlib.reload(sys.modules[mod])
+
+    def test_facts_above_threshold_are_committed(self):
+        # Default threshold (0.0): every extracted fact is committed, not staged.
+        self._run(graph=True)
+        conn = self._conn()
+        try:
+            self.assertEqual(
+                {r[0] for r in conn.execute("SELECT DISTINCT status FROM entities")},
+                {"approved"},
+            )
+            self.assertEqual(
+                {r[0] for r in conn.execute("SELECT DISTINCT status FROM relations")},
+                {"approved"},
+            )
+        finally:
+            conn.close()
+
+    def test_low_confidence_facts_are_staged_not_committed(self):
+        # Threshold above the deterministic extractor's confidence stages
+        # everything: the rows exist but never surface in retrieval.
+        self._set_min_conf("0.9")
+        self._run(graph=True)
+        conn = self._conn()
+        try:
+            self.assertGreater(
+                conn.execute("SELECT COUNT(*) FROM entities").fetchone()[0], 0
+            )
+            self.assertEqual(
+                {r[0] for r in conn.execute("SELECT DISTINCT status FROM entities")},
+                {"pending"},
+            )
+        finally:
+            conn.close()
+        from pocket import retrieval, admin
+
+        # Pending facts are invisible to graph reads.
+        self.assertEqual(
+            retrieval.graph_neighborhood("Pocket", db_path=self.db_path), {}
+        )
+        self.assertEqual(
+            retrieval.list_graph_concepts(db_path=self.db_path), []
+        )
+        # But they are listed for review.
+        pending = admin.list_pending(db_path=self.db_path)
+        self.assertTrue(pending["entities"])
+        self.assertIn(
+            "Pocket", {e["name"] for e in pending["entities"]}
+        )
+
+    def test_approve_pending_commits_facts(self):
+        self._set_min_conf("0.9")
+        self._run(graph=True)
+        from pocket import retrieval, admin
+
+        counts = admin.approve_pending(db_path=self.db_path)
+        self.assertGreater(counts["entities"], 0)
+        # Now retrievable, and nothing left pending.
+        node = retrieval.graph_neighborhood("Pocket", db_path=self.db_path)
+        self.assertTrue(node)
+        self.assertEqual(node["name"], "Pocket")
+        self.assertEqual(admin.list_pending(db_path=self.db_path)["entities"], [])
+
+    def test_approve_specific_id_leaves_others_pending(self):
+        self._set_min_conf("0.9")
+        self._run(graph=True)
+        from pocket import admin
+
+        pending = admin.list_pending(db_path=self.db_path)["entities"]
+        self.assertGreaterEqual(len(pending), 2)
+        target = pending[0]["id"]
+        counts = admin.approve_pending(ids=[target], db_path=self.db_path)
+        self.assertEqual(counts["entities"], 1)
+        remaining = {
+            e["id"] for e in admin.list_pending(db_path=self.db_path)["entities"]
+        }
+        self.assertNotIn(target, remaining)
+        self.assertTrue(remaining)  # the others stay staged
+
+    def test_reject_pending_discards_facts(self):
+        self._set_min_conf("0.9")
+        self._run(graph=True)
+        from pocket import admin
+
+        before = admin.list_pending(db_path=self.db_path)["entities"]
+        self.assertTrue(before)
+        counts = admin.reject_pending(db_path=self.db_path)
+        self.assertEqual(counts["entities"], len(before))
+        conn = self._conn()
+        try:
+            self.assertEqual(
+                conn.execute("SELECT COUNT(*) FROM entities").fetchone()[0], 0
+            )
+            self.assertEqual(
+                conn.execute("SELECT COUNT(*) FROM relations").fetchone()[0], 0
+            )
+        finally:
+            conn.close()
+        self.assertEqual(admin.list_pending(db_path=self.db_path)["entities"], [])
+
+    def test_cli_graph_review_lists_and_approves(self):
+        import pocket.cli as cli_module
+
+        self._set_min_conf("0.9")
+        importlib.reload(cli_module)
+        from click.testing import CliRunner
+
+        self._run(graph=True)
+        runner = CliRunner()
+
+        res = runner.invoke(cli_module.cli, ["graph", "review"])
+        self.assertEqual(res.exit_code, 0, res.output)
+        self.assertIn("Pending entities", res.output)
+        self.assertIn("Pocket", res.output)
+
+        res = runner.invoke(cli_module.cli, ["graph", "review", "--approve-all"])
+        self.assertEqual(res.exit_code, 0, res.output)
+        self.assertIn("Approved", res.output)
+
+        res = runner.invoke(cli_module.cli, ["graph", "review"])
+        self.assertEqual(res.exit_code, 0, res.output)
+        self.assertIn("No facts are pending", res.output)
+
+    def test_cli_graph_show_still_routes_to_neighborhood(self):
+        # Backward compat: `pocket graph <entity>` works without the `show` verb.
+        import pocket.cli as cli_module
+
+        importlib.reload(cli_module)
+        from click.testing import CliRunner
+
+        self._run(graph=True)
+        runner = CliRunner()
+        res = runner.invoke(cli_module.cli, ["graph", "Pocket"])
+        self.assertEqual(res.exit_code, 0, res.output)
+        self.assertIn("Pocket", res.output)
+        self.assertIn("Relations", res.output)
 if __name__ == "__main__":
     unittest.main()

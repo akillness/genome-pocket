@@ -339,6 +339,26 @@ def _graph_available(conn: sqlite3.Connection) -> bool:
     )
 
 
+def _has_status_column(conn: sqlite3.Connection, table: str) -> bool:
+    """Whether `table` carries the POCKET-302 HITL `status` column."""
+    try:
+        cols = [r[1] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()]
+    except sqlite3.Error:
+        return False
+    return "status" in cols
+
+
+def _status_clause(conn: sqlite3.Connection, table: str, alias: str = "") -> str:
+    """SQL predicate restricting graph reads to approved (committed) facts.
+
+    Pending facts staged by the HITL gate (POCKET-302) stay out of retrieval
+    until ``pocket graph review`` accepts them. Legacy graphs built before the
+    status column existed get an always-true predicate so reads still work.
+    """
+    col = f"{alias}.status" if alias else "status"
+    return f"{col} = 'approved'" if _has_status_column(conn, table) else "1=1"
+
+
 def _load_chunk_ids(raw: Optional[str]) -> List[int]:
     """Parse an entity's ``source_chunk_ids`` JSON column into a list of ints."""
     if not raw:
@@ -377,7 +397,8 @@ def _graph_search(
     seed_n = max(3, limit)
     seeds = conn.execute(
         "SELECT id, source_chunk_ids, vec_distance_cosine(embedding, ?) AS d "
-        "FROM entities ORDER BY d ASC LIMIT ?",
+        f"FROM entities WHERE {_status_clause(conn, 'entities')} "
+        "ORDER BY d ASC LIMIT ?",
         (query_vector, seed_n),
     ).fetchall()
     if not seeds:
@@ -398,14 +419,15 @@ def _graph_search(
         # 3. One-hop traversal: the edge's source chunk plus the neighbor's
         #    mention chunks, ordered by edge confidence.
         edges = conn.execute(
-            """
+            f"""
             SELECT r.source_chunk_id, r.subject_id, r.object_id,
                    sj.source_chunk_ids AS subj_chunks,
                    ob.source_chunk_ids AS obj_chunks
             FROM relations r
             LEFT JOIN entities sj ON sj.id = r.subject_id
             LEFT JOIN entities ob ON ob.id = r.object_id
-            WHERE r.subject_id = ? OR r.object_id = ?
+            WHERE (r.subject_id = ? OR r.object_id = ?)
+              AND {_status_clause(conn, 'relations', 'r')}
             ORDER BY r.confidence DESC
             """,
             (node_id, node_id),
@@ -454,7 +476,8 @@ def graph_neighborhood(
         # 1. Exact / alias match.
         row = conn.execute(
             "SELECT id, name, type, aliases, confidence, source_file "
-            "FROM entities WHERE lower(name) = lower(?) LIMIT 1",
+            f"FROM entities WHERE lower(name) = lower(?) "
+            f"AND {_status_clause(conn, 'entities')} LIMIT 1",
             (entity,),
         ).fetchone()
         # 2. Fall back to nearest by name embedding.
@@ -466,21 +489,23 @@ def graph_neighborhood(
             row = conn.execute(
                 "SELECT id, name, type, aliases, confidence, source_file, "
                 "vec_distance_cosine(embedding, ?) AS d "
-                "FROM entities ORDER BY d ASC LIMIT 1",
+                f"FROM entities WHERE {_status_clause(conn, 'entities')} "
+                "ORDER BY d ASC LIMIT 1",
                 (qv,),
             ).fetchone()
         if row is None:
             return {}
         node_id, name, etype, aliases, confidence, source_file = row[:6]
         edges = conn.execute(
-            """
+            f"""
             SELECT r.predicate, r.object_id, r.subject_id, r.evidence,
                    r.confidence, r.source_file,
                    so.name AS subject_name, ob.name AS object_name
             FROM relations r
             LEFT JOIN entities so ON so.id = r.subject_id
             LEFT JOIN entities ob ON ob.id = r.object_id
-            WHERE r.subject_id = ? OR r.object_id = ?
+            WHERE (r.subject_id = ? OR r.object_id = ?)
+              AND {_status_clause(conn, 'relations', 'r')}
             ORDER BY r.confidence DESC
             LIMIT ?
             """,
@@ -577,10 +602,11 @@ def list_graph_concepts(
             return []
         if concept:
             rows = conn.execute(
-                """
+                f"""
                 SELECT id, name, type, confidence, source_file
                 FROM entities
                 WHERE lower(name) LIKE lower(?)
+                  AND {_status_clause(conn, 'entities')}
                 ORDER BY confidence DESC
                 LIMIT ?
                 """,
@@ -588,9 +614,10 @@ def list_graph_concepts(
             ).fetchall()
         else:
             rows = conn.execute(
-                """
+                f"""
                 SELECT id, name, type, confidence, source_file
                 FROM entities
+                WHERE {_status_clause(conn, 'entities')}
                 ORDER BY confidence DESC
                 LIMIT ?
                 """,
@@ -601,13 +628,14 @@ def list_graph_concepts(
         for eid, name, etype, conf, src in rows:
             # Fetch the single most-confident relation for context.
             rel = conn.execute(
-                """
+                f"""
                 SELECT r.predicate, ob.name AS obj_name, so.name AS sub_name,
                        r.subject_id
                 FROM relations r
                 LEFT JOIN entities ob ON ob.id = r.object_id
                 LEFT JOIN entities so ON so.id = r.subject_id
-                WHERE r.subject_id = ? OR r.object_id = ?
+                WHERE (r.subject_id = ? OR r.object_id = ?)
+                  AND {_status_clause(conn, 'relations', 'r')}
                 ORDER BY r.confidence DESC
                 LIMIT 1
                 """,

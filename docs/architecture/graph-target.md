@@ -209,10 +209,12 @@ implementation ticket.)
 
 ## 7. Human-in-the-loop & ops
 
-- **Approval gate (POCKET-302):** entities/relations below a `POCKET_GRAPH_MIN_CONFIDENCE`
-  threshold are written to a staging area, not committed, until `pocket graph review`
-  approves them — matching the ops-layer.md HITL design and the uncertainty-guided stance
-  from arXiv:2605.26835.
+- **Approval gate (POCKET-302) — *delivered (graph slice)*:** entities/relations below a
+  `POCKET_GRAPH_MIN_CONFIDENCE` threshold (or with a staged endpoint) are written with
+  `status="pending"`, not committed, and stay out of every graph read until
+  `pocket graph review` approves them (`--approve`/`--reject <id>`, `--approve-all`/
+  `--reject-all`) — matching the ops-layer.md HITL design and the uncertainty-guided
+  stance from arXiv:2605.26835. An interactive in-update prompt is the remaining slice.
 - **Lineage:** every node/edge stores its source file, chunk id, evidence span, and (for
   merges) the resolution rationale — so the ops-layer "retrieval lineage" block extends to
   graph facts.
@@ -253,8 +255,9 @@ POCKET-404 is too large as one item. Recommend splitting:
    memoization, schema-agnostic JSON + confidence/evidence.
 3. **POCKET-404c — Entity-resolution op:** `ops/entity_resolution.py` (blocking →
    adjudication → propagation).
-4. **POCKET-404d — GraphRAG retrieval:** N-list RRF fusion, `mode="graph"`, CLI/MCP surface.
-5. **POCKET-302 (graph slice) — HITL approval gate** for low-confidence facts.
+4. **POCKET-404d — GraphRAG retrieval:** N-list RRF fusion, `mode="graph"`, CLI/MCP surface. ✅
+5. **POCKET-302 (graph slice) — HITL approval gate** for low-confidence facts (staging +
+   `pocket graph review`). ✅
 
 404a is self-contained and offline-testable (no LLM, no network) — the right first slice,
 exactly as POCKET-405 was chosen for being low-risk and self-contained.

@@ -161,3 +161,153 @@ def _count(conn: sqlite3.Connection) -> tuple:
         f"SELECT COUNT(DISTINCT file_path) FROM {_TARGET_TABLE}"
     ).fetchone()[0]
     return sources, chunks
+
+
+# --- Human-in-the-loop graph review (POCKET-302) ---------------------------
+# Low-confidence facts (below POCKET_GRAPH_MIN_CONFIDENCE) are written with
+# status="pending" instead of being committed. Retrieval ignores them until a
+# human accepts them here, via `pocket graph review`.
+
+_ENTITIES = "entities"
+_RELATIONS = "relations"
+
+
+def _has_status_column(conn: sqlite3.Connection, table: str) -> bool:
+    if not _table_exists(conn, table):
+        return False
+    cols = [r[1] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()]
+    return "status" in cols
+
+
+def list_pending(db_path: Optional[Path] = None) -> Dict:
+    """Return the graph facts staged for review.
+
+    ``{"entities": [...], "relations": [...]}`` — each entity carries
+    ``id/name/type/confidence/source_file``; each relation additionally resolves
+    its subject/object names (joining nodes of any status). Empty lists when no
+    graph, no status column, or nothing pending.
+    """
+    db_path = Path(db_path or config.POCKET_SQLITE_DB)
+    empty = {"entities": [], "relations": []}
+    if not db_path.exists():
+        return empty
+    conn = sqlite3.connect(str(db_path))
+    try:
+        entities = []
+        if _has_status_column(conn, _ENTITIES):
+            entities = [
+                {
+                    "id": r[0],
+                    "name": r[1],
+                    "type": r[2],
+                    "confidence": r[3],
+                    "source_file": r[4],
+                }
+                for r in conn.execute(
+                    "SELECT id, name, type, confidence, source_file "
+                    "FROM entities WHERE status = 'pending' "
+                    "ORDER BY confidence ASC"
+                ).fetchall()
+            ]
+        relations = []
+        if _has_status_column(conn, _RELATIONS):
+            relations = [
+                {
+                    "id": r[0],
+                    "predicate": r[1],
+                    "subject": r[2],
+                    "object": r[3],
+                    "confidence": r[4],
+                    "source_file": r[5],
+                }
+                for r in conn.execute(
+                    "SELECT r.id, r.predicate, so.name, ob.name, r.confidence, "
+                    "       r.source_file "
+                    "FROM relations r "
+                    "LEFT JOIN entities so ON so.id = r.subject_id "
+                    "LEFT JOIN entities ob ON ob.id = r.object_id "
+                    "WHERE r.status = 'pending' "
+                    "ORDER BY r.confidence ASC"
+                ).fetchall()
+            ]
+    finally:
+        conn.close()
+    return {"entities": entities, "relations": relations}
+
+
+def _pending_ids(conn: sqlite3.Connection, table: str, ids: Optional[list]) -> list:
+    """Pending row ids in `table`, optionally narrowed to `ids`."""
+    if not _has_status_column(conn, table):
+        return []
+    if ids is None:
+        rows = conn.execute(
+            f"SELECT id FROM {table} WHERE status = 'pending'"
+        ).fetchall()
+    else:
+        if not ids:
+            return []
+        ph = ", ".join("?" * len(ids))
+        rows = conn.execute(
+            f"SELECT id FROM {table} WHERE status = 'pending' AND id IN ({ph})",
+            list(ids),
+        ).fetchall()
+    return [r[0] for r in rows]
+
+
+def approve_pending(ids: Optional[list] = None, db_path: Optional[Path] = None) -> Dict:
+    """Commit staged facts: flip ``status`` from pending to approved.
+
+    ``ids=None`` approves every pending fact; otherwise only matching ids (which
+    may name entities and/or relations). Returns ``{"entities", "relations"}``
+    counts actually approved.
+    """
+    db_path = Path(db_path or config.POCKET_SQLITE_DB)
+    if not db_path.exists():
+        return {"entities": 0, "relations": 0}
+    conn = sqlite3.connect(str(db_path))
+    try:
+        counts = {}
+        for key, table in (("entities", _ENTITIES), ("relations", _RELATIONS)):
+            target = _pending_ids(conn, table, ids)
+            if target:
+                ph = ", ".join("?" * len(target))
+                conn.execute(
+                    f"UPDATE {table} SET status = 'approved' WHERE id IN ({ph})",
+                    target,
+                )
+            counts[key] = len(target)
+        conn.commit()
+    finally:
+        conn.close()
+    return counts
+
+
+def reject_pending(ids: Optional[list] = None, db_path: Optional[Path] = None) -> Dict:
+    """Discard staged facts: delete pending rows (and entity FTS mirrors).
+
+    ``ids=None`` rejects every pending fact. Returns counts actually removed.
+    """
+    db_path = Path(db_path or config.POCKET_SQLITE_DB)
+    if not db_path.exists():
+        return {"entities": 0, "relations": 0}
+    conn = sqlite3.connect(str(db_path))
+    try:
+        counts = {}
+        for key, table in (("entities", _ENTITIES), ("relations", _RELATIONS)):
+            target = _pending_ids(conn, table, ids)
+            if target:
+                ph = ", ".join("?" * len(target))
+                conn.execute(
+                    f"DELETE FROM {table} WHERE id IN ({ph})", target
+                )
+                fts = f"_pocket_fts_{table}"
+                if _table_exists(conn, fts):
+                    conn.executemany(
+                        f"DELETE FROM {fts} WHERE row_id = ?",
+                        [(i,) for i in target],
+                    )
+            counts[key] = len(target)
+        conn.commit()
+    finally:
+        conn.close()
+    return counts

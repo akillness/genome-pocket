@@ -48,6 +48,7 @@ class EntityNode:
     source_file: str                          # Primary chunk's source file (lineage anchor)
     source_chunk_ids: str                     # JSON list of chunk ids mentioning this entity
     resolution: str = "[]"                    # JSON merge audit trail (POCKET-404c)
+    status: str = "approved"                  # "approved" | "pending" (HITL gate, POCKET-302)
 
 
 @dataclass
@@ -62,6 +63,7 @@ class RelationEdge:
     confidence: float                         # Extraction confidence
     source_file: str                          # Lineage anchor
     source_chunk_id: int                      # Chunk the edge was extracted from
+    status: str = "approved"                  # "approved" | "pending" (HITL gate, POCKET-302)
 
 
 _splitter = RecursiveSplitter()
@@ -214,30 +216,39 @@ async def extract_graph_file(
         for member in r.members:
             surface_to_id[normalize(member.name)] = ent_id
 
-    # Commit entity nodes (HITL gate: skip facts below the confidence threshold).
+    # Commit entity nodes. The HITL gate (POCKET-302) does NOT drop low-confidence
+    # facts; it stages them as ``status="pending"`` so ``pocket graph review`` can
+    # approve or reject them. Retrieval defaults to approved-only, so pending facts
+    # stay out of search results until a human accepts them.
     for node in id_to_node.values():
-        if node.confidence < min_conf:
-            continue
+        node.status = "approved" if node.confidence >= min_conf else "pending"
         entities_target.declare_row(row=node)
 
-    # Rewire and commit edges to canonical entity ids.
+    # Rewire and commit edges to canonical entity ids. Edges below the gate, or
+    # whose endpoints are themselves staged, are written as ``status="pending"``
+    # (not dropped) so the whole low-confidence fact is reviewable together.
     seen_edge_ids = set()
     for rel, chunk_id in relations:
         subj_id = surface_to_id.get(normalize(rel.subject))
         obj_id = surface_to_id.get(normalize(rel.object))
         if subj_id is None or obj_id is None or subj_id == obj_id:
             continue
-        if rel.confidence < min_conf:
-            continue
-        # Both endpoints must actually be committed nodes.
+        # Both endpoints must actually be extracted nodes.
         if subj_id not in id_to_node or obj_id not in id_to_node:
-            continue
-        if id_to_node[subj_id].confidence < min_conf or id_to_node[obj_id].confidence < min_conf:
             continue
         edge_id = await id_gen.next_id(f"{subj_id}\x00{rel.predicate}\x00{obj_id}")
         if edge_id in seen_edge_ids:
             continue
         seen_edge_ids.add(edge_id)
+        endpoints_pending = (
+            id_to_node[subj_id].status == "pending"
+            or id_to_node[obj_id].status == "pending"
+        )
+        edge_status = (
+            "approved"
+            if rel.confidence >= min_conf and not endpoints_pending
+            else "pending"
+        )
         relations_target.declare_row(row=RelationEdge(
             id=edge_id,
             subject_id=subj_id,
@@ -247,6 +258,7 @@ async def extract_graph_file(
             confidence=rel.confidence,
             source_file=str(filename),
             source_chunk_id=chunk_id,
+            status=edge_status,
         ))
 
     # The entities target's memo (set by the engine) is the incremental key; the

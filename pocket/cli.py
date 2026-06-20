@@ -87,9 +87,10 @@ def update(live, interval, graph):
 @click.option("--limit", default=5, help="Number of results to return")
 @click.option(
     "--mode",
-    type=click.Choice(["hybrid", "vector", "lexical"]),
+    type=click.Choice(["hybrid", "vector", "lexical", "graph"]),
     default="hybrid",
-    help="Retrieval strategy: hybrid (vector+lexical RRF), vector, or lexical.",
+    help="Retrieval strategy: hybrid (vector+lexical+graph RRF), vector, "
+    "lexical, or graph (entity-anchored multi-hop traversal).",
 )
 def search(query, limit, mode):
     """Search the indexed notes using hybrid (vector + lexical) retrieval."""

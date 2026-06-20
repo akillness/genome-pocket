@@ -12,6 +12,19 @@ by installing it in an isolated venv and diffing its public API against the
 vendored `pocketindex` engine.
 
 ### Added
+- **GraphRAG retrieval — entity-anchored multi-hop fusion (POCKET-404d).**
+  `pocket/retrieval.py` adds `_graph_search()`, a third retriever that anchors the query
+  to the nearest `entities` by name embedding, traverses one hop over `relations`, and
+  collects the `source_chunk_ids` of every touched node/edge — surfacing real `embeddings`
+  chunks (full lineage preserved) in graph-relevance order. `_fuse()` now blends it as a
+  third Reciprocal Rank Fusion list (optional `graph_rows` arg keeps the two-list
+  signature), and `RetrievalHit` gains a `graph_rank`. New `mode="graph"` (traversal only)
+  and graph-aware `mode="hybrid"` (vector + lexical + graph); both stay backward compatible
+  because graph only participates when the `entities` table exists. Surfaced through
+  `pocket search --mode graph`, the existing `pocket graph <entity>` CLI, a new MCP
+  `traverse_graph` tool, and the REST `/search?mode=graph` endpoint. The design follows the
+  GraphRAG multi-hop pattern (arXiv:2606.00610 / 2606.17856). Tests: graph-mode anchoring,
+  empty-without-graph guard, hybrid graph-signal fusion, and the `traverse_graph` tool (4).
 - **Auditable entity-resolution merge rationale (POCKET-404c).**
   `pocketindex/ops/entity_resolution.py` now records *why* each merge happened: every
   accepted union carries a `MergeRecord` (`kept` / `merged` / `method` ∈

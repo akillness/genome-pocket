@@ -639,6 +639,60 @@ class TestGraphTarget(unittest.TestCase):
         rendered = retrieval.format_neighborhood(node)
         self.assertIn("Pocket", rendered)
         self.assertIn("SQLite", rendered)
+        self.assertIn("SQLite", rendered)
+
+    def test_graph_mode_search_returns_anchored_chunks(self):
+        from pocket import retrieval
+
+        importlib.reload(retrieval)
+        self._run(graph=True)
+        hits = retrieval.search(
+            "SQLite storage", limit=5, mode="graph", db_path=self.db_path
+        )
+        self.assertTrue(hits, "graph mode must surface entity-anchored chunks")
+        self.assertTrue(any(h.file_path.endswith("a.md") for h in hits))
+        # Graph hits carry the third-list rank, not the vector/lexical ranks.
+        self.assertIsNotNone(hits[0].graph_rank)
+        self.assertIsNone(hits[0].vector_rank)
+        self.assertIsNone(hits[0].lexical_rank)
+        # Every graph hit resolves back to a real source chunk (lineage intact).
+        self.assertTrue(all(h.end_offset > h.start_offset for h in hits))
+
+    def test_graph_mode_empty_without_graph_tables(self):
+        from pocket import retrieval
+
+        importlib.reload(retrieval)
+        self._run(graph=False)  # no entities/relations tables materialized
+        hits = retrieval.search(
+            "SQLite", limit=5, mode="graph", db_path=self.db_path
+        )
+        self.assertEqual(hits, [])
+
+    def test_hybrid_fuses_graph_signal_when_graph_present(self):
+        from pocket import retrieval
+
+        importlib.reload(retrieval)
+        self._run(graph=True)
+        hits = retrieval.search(
+            "SQLite storage", limit=5, mode="hybrid", db_path=self.db_path
+        )
+        self.assertTrue(hits)
+        # The third (graph) list participates: at least one hit was reinforced
+        # by graph traversal on top of the vector/lexical fusion.
+        self.assertTrue(any(h.graph_rank is not None for h in hits))
+
+    def test_traverse_graph_mcp_tool(self):
+        from pocket import retrieval, mcp_server
+
+        importlib.reload(retrieval)
+        importlib.reload(mcp_server)
+        self._run(graph=True)
+        rendered = mcp_server.traverse_graph("Pocket")
+        self.assertIn("Pocket", rendered)
+        self.assertIn("SQLite", rendered)
+        # The traversal renders the one-hop relations, not just the node header.
+        self.assertIn("Relations", rendered)
+        self.assertIn("->", rendered)
 
     def test_drop_removes_graph_tables(self):
         from pocket import admin

@@ -15,12 +15,12 @@ def search_knowledge(query: str, limit: int = 5, mode: str = "hybrid") -> str:
     Args:
         query: The search query.
         limit: Maximum number of results to return.
-        mode: Retrieval strategy - 'hybrid' (default), 'vector', or 'lexical'.
+        mode: Retrieval strategy - 'hybrid' (default), 'vector', 'lexical', or 'graph'.
     """
     if not config.POCKET_SQLITE_DB.exists():
         return "Database does not exist. Please run 'pocket update' first."
-    if mode not in ("hybrid", "vector", "lexical"):
-        return "mode must be one of: hybrid, vector, lexical."
+    if mode not in ("hybrid", "vector", "lexical", "graph"):
+        return "mode must be one of: hybrid, vector, lexical, graph."
 
     hits = retrieval.search(query, limit=limit, mode=mode)
     return retrieval.format_hits(hits)
@@ -84,6 +84,34 @@ def list_concepts(concept: str = None) -> str:
         )
     return "\n".join(lines)
 
+
+@mcp.tool()
+def traverse_graph(entity: str, limit: int = 10) -> str:
+    """Traverse the knowledge graph from an entity and list its relations.
+
+    Resolves ``entity`` to the nearest node (exact/alias match first, then
+    vector similarity over entity-name embeddings) and returns its one-hop
+    neighborhood: each relation with direction, predicate, neighbor, evidence
+    confidence, and source file. Requires a graph built with
+    ``pocket update --graph`` (``POCKET_GRAPH=1``).
+
+    Args:
+        entity: The entity name to anchor the traversal on.
+        limit: Maximum number of relations to return.
+    """
+    if not config.POCKET_SQLITE_DB.exists():
+        return "Database does not exist. Please run 'pocket update --graph' first."
+
+    node = retrieval.graph_neighborhood(entity, limit=limit)
+    if not node:
+        graph_env = os.environ.get("POCKET_GRAPH", "")
+        if not graph_env:
+            return (
+                "No graph data found. Re-index with POCKET_GRAPH=1 enabled: "
+                "'POCKET_GRAPH=1 pocket update --graph'"
+            )
+        return f"No matching entity found for '{entity}'."
+    return retrieval.format_neighborhood(node)
 
 def main():
     mcp.run()

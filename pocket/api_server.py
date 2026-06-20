@@ -7,7 +7,7 @@ pulled in transitively by the MCP dependency) to avoid adding heavy deps.
 
 Endpoints:
   GET  /health                       -> liveness + index status
-  GET  /search?q=...&limit=&mode=    -> hybrid/vector/lexical retrieval
+  GET  /search?q=...&limit=&mode=    -> hybrid/vector/lexical/graph retrieval
   POST /search  {query, limit, mode} -> same, JSON body
   GET  /lineage?file_path=...        -> per-file chunk lineage
 """
@@ -19,7 +19,7 @@ from starlette.routing import Route
 import pocket.config as config
 from pocket import retrieval
 
-_VALID_MODES = {"hybrid", "vector", "lexical"}
+_VALID_MODES = {"hybrid", "vector", "lexical", "graph"}
 
 
 def _index_exists() -> bool:

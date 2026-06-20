@@ -15,6 +15,7 @@ Every returned hit carries full lineage (source file + character offsets) so an
 agent can cite the exact source bytes, matching pocketindex's end-to-end lineage
 guarantee.
 """
+import json
 import sqlite3
 from dataclasses import dataclass, asdict
 from functools import lru_cache
@@ -44,6 +45,7 @@ class RetrievalHit:
     score: float
     vector_rank: Optional[int] = None
     lexical_rank: Optional[int] = None
+    graph_rank: Optional[int] = None
 
     def to_dict(self) -> Dict:
         return asdict(self)
@@ -128,8 +130,11 @@ def search(
 ) -> List[RetrievalHit]:
     """Run retrieval and return ranked, lineage-tagged hits.
 
-    ``mode`` is one of ``"hybrid"`` (vector + lexical via RRF), ``"vector"``
-    (semantic only), or ``"lexical"`` (keyword/BM25 only).
+    ``mode`` is one of ``"hybrid"`` (vector + lexical + graph via RRF),
+    ``"vector"`` (semantic only), ``"lexical"`` (keyword/BM25 only), or
+    ``"graph"`` (GraphRAG: entity-anchored multi-hop traversal). The graph
+    strategy only participates when an ``entities`` table is present, so
+    ``"hybrid"`` stays backward compatible on graph-less databases.
     """
     db_path = db_path or config.POCKET_SQLITE_DB
     model_name = model_name or config.EMBEDDING_MODEL
@@ -143,30 +148,40 @@ def search(
     try:
         vector_rows: List[tuple] = []
         lexical_rows: List[tuple] = []
+        graph_rows: List[tuple] = []
 
-        if mode in ("hybrid", "vector"):
+        # Both vector search and graph entity-anchoring need the query embedding.
+        query_vector = None
+        if mode in ("hybrid", "vector", "graph"):
             model = _get_model(model_name)
             query_embedding = model.encode(query, normalize_embeddings=True)
             query_vector = sqlite_vec.serialize_float32(query_embedding)
+
+        if mode in ("hybrid", "vector"):
             vector_rows = _vector_search(conn, query_vector, fetch_n)
 
         if mode in ("hybrid", "lexical") and _fts_available(conn):
             lexical_rows = _lexical_search(conn, query, fetch_n)
+
+        if mode in ("hybrid", "graph") and _graph_available(conn):
+            graph_rows = _graph_search(conn, query_vector, fetch_n)
     finally:
         conn.close()
 
-    return _fuse(vector_rows, lexical_rows, limit)
+    return _fuse(vector_rows, lexical_rows, limit, graph_rows)
 
 
 def _fuse(
     vector_rows: List[tuple],
     lexical_rows: List[tuple],
     limit: int,
+    graph_rows: Optional[List[tuple]] = None,
 ) -> List[RetrievalHit]:
-    """Combine vector and lexical results with Reciprocal Rank Fusion.
+    """Combine vector, lexical, and graph results with Reciprocal Rank Fusion.
 
-    Rows are keyed by chunk id so the same chunk found by both strategies has
-    its reciprocal-rank contributions summed.
+    Rows are keyed by chunk id so the same chunk found by several strategies has
+    its reciprocal-rank contributions summed. ``graph_rows`` is the optional
+    third (GraphRAG) list; passing it preserves the original two-list signature.
     """
     accum: Dict[int, RetrievalHit] = {}
 
@@ -186,6 +201,15 @@ def _fuse(
             hit = RetrievalHit(file_path, text, start, end, score=0.0)
             accum[chunk_id] = hit
         hit.lexical_rank = rank
+        hit.score += 1.0 / (RRF_K + rank)
+
+    for rank, row in enumerate(graph_rows or [], start=1):
+        chunk_id, file_path, text, start, end, _g = row
+        hit = accum.get(chunk_id)
+        if hit is None:
+            hit = RetrievalHit(file_path, text, start, end, score=0.0)
+            accum[chunk_id] = hit
+        hit.graph_rank = rank
         hit.score += 1.0 / (RRF_K + rank)
 
     ranked = sorted(accum.values(), key=lambda h: h.score, reverse=True)
@@ -314,6 +338,97 @@ def _graph_available(conn: sqlite3.Connection) -> bool:
         is not None
     )
 
+
+def _load_chunk_ids(raw: Optional[str]) -> List[int]:
+    """Parse an entity's ``source_chunk_ids`` JSON column into a list of ints."""
+    if not raw:
+        return []
+    try:
+        ids = json.loads(raw)
+    except (ValueError, TypeError):
+        return []
+    out: List[int] = []
+    for cid in ids if isinstance(ids, list) else []:
+        try:
+            out.append(int(cid))
+        except (ValueError, TypeError):
+            continue
+    return out
+
+
+def _graph_search(
+    conn: sqlite3.Connection,
+    query_vector,
+    limit: int,
+) -> List[tuple]:
+    """GraphRAG retriever: anchor the query to entities, traverse one hop, and
+    surface the chunks that produced the touched nodes and edges (POCKET-404d).
+
+    Returns rows shaped like the vector/lexical retrievers
+    ``(chunk_id, file_path, text, start, end, _score)`` in graph-relevance order
+    so :func:`_fuse` can blend them as a third ranked list. Every row resolves
+    back to a real ``embeddings`` chunk, so the citation/lineage guarantee holds.
+    Returns ``[]`` when there is no graph or no anchorable seed.
+    """
+    if not _graph_available(conn):
+        return []
+
+    # 1. Entity anchoring: nearest seed nodes by name embedding.
+    seed_n = max(3, limit)
+    seeds = conn.execute(
+        "SELECT id, source_chunk_ids, vec_distance_cosine(embedding, ?) AS d "
+        "FROM entities ORDER BY d ASC LIMIT ?",
+        (query_vector, seed_n),
+    ).fetchall()
+    if not seeds:
+        return []
+
+    ordered_ids: List[int] = []
+    seen: set = set()
+
+    def _push(cid: Optional[int]) -> None:
+        if cid is not None and cid not in seen:
+            seen.add(cid)
+            ordered_ids.append(cid)
+
+    for node_id, chunk_ids_json, _d in seeds:
+        # 2. The seed's own mention chunks rank first.
+        for cid in _load_chunk_ids(chunk_ids_json):
+            _push(cid)
+        # 3. One-hop traversal: the edge's source chunk plus the neighbor's
+        #    mention chunks, ordered by edge confidence.
+        edges = conn.execute(
+            """
+            SELECT r.source_chunk_id, r.subject_id, r.object_id,
+                   sj.source_chunk_ids AS subj_chunks,
+                   ob.source_chunk_ids AS obj_chunks
+            FROM relations r
+            LEFT JOIN entities sj ON sj.id = r.subject_id
+            LEFT JOIN entities ob ON ob.id = r.object_id
+            WHERE r.subject_id = ? OR r.object_id = ?
+            ORDER BY r.confidence DESC
+            """,
+            (node_id, node_id),
+        ).fetchall()
+        for edge_chunk, subj_id, _obj_id, subj_chunks, obj_chunks in edges:
+            _push(edge_chunk)
+            neighbor_chunks = obj_chunks if subj_id == node_id else subj_chunks
+            for cid in _load_chunk_ids(neighbor_chunks):
+                _push(cid)
+
+    ordered_ids = ordered_ids[:limit]
+    if not ordered_ids:
+        return []
+
+    placeholders = ",".join("?" * len(ordered_ids))
+    rows = conn.execute(
+        f"SELECT id, file_path, text, start_offset, end_offset "
+        f"FROM embeddings WHERE id IN ({placeholders})",
+        ordered_ids,
+    ).fetchall()
+    by_id = {r[0]: r for r in rows}
+    # Preserve graph-relevance order; some chunk ids may no longer exist.
+    return [(*by_id[cid], 0.0) for cid in ordered_ids if cid in by_id]
 
 def graph_neighborhood(
     entity: str,

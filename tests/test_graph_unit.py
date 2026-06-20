@@ -176,3 +176,82 @@ class TestGraphTargetUnit(unittest.TestCase):
                 pix._CONTEXT.pop(EMBEDDER.name, None)
 
         asyncio.run(_run())
+
+class TestExtractionPromptAndMemo(unittest.TestCase):
+    """POCKET-404b: hardened JSON prompt + per-(chunk, model, prompt) memo."""
+
+    def test_prompt_version_and_hardened_prompt(self):
+        from pocketindex.ops.extract import PROMPT_VERSION, _EXTRACTION_PROMPT
+
+        self.assertTrue(isinstance(PROMPT_VERSION, str) and PROMPT_VERSION)
+        # The hardened prompt must pin the strict-JSON schema, grounding, evidence,
+        # and calibrated confidence directives the 2026 literature calls for.
+        for token in ("entities", "relations", "evidence", "confidence", "ONLY"):
+            self.assertIn(token, _EXTRACTION_PROMPT)
+
+    def test_memoizing_extractor_caches_by_text(self):
+        from pocketindex.ops.extract import (
+            Extraction,
+            ExtractedEntity,
+            MemoizingExtractor,
+        )
+
+        class CountingExtractor:
+            name = "counting"
+            model = "fake-model"
+
+            def __init__(self):
+                self.calls = 0
+
+            def extract(self, text):
+                self.calls += 1
+                return Extraction(entities=[ExtractedEntity(name=text[:5])])
+
+        inner = CountingExtractor()
+        memo = MemoizingExtractor(inner)
+
+        first = memo.extract("Pocket indexes notes locally.")
+        second = memo.extract("Pocket indexes notes locally.")
+        self.assertEqual(inner.calls, 1)          # second call served from cache
+        self.assertEqual(memo.misses, 1)
+        self.assertEqual(first.entities[0].name, second.entities[0].name)
+
+        memo.extract("A different chunk of text.")
+        self.assertEqual(inner.calls, 2)          # new text => cache miss
+
+    def test_memo_key_separates_model_and_prompt_version(self):
+        from pocketindex.ops.extract import extraction_cache_key
+
+        base = extraction_cache_key("chunk", "model-a", "2026.1")
+        self.assertNotEqual(base, extraction_cache_key("chunk", "model-b", "2026.1"))
+        self.assertNotEqual(base, extraction_cache_key("chunk", "model-a", "2026.2"))
+        self.assertEqual(base, extraction_cache_key("chunk", "model-a", "2026.1"))
+
+    def test_sqlite_extraction_store_persists_across_instances(self):
+        from pocketindex.ops.extract import SqliteExtractionStore
+
+        conn = sqlite3.connect(":memory:")
+        try:
+            store = SqliteExtractionStore(conn)
+            store.set("k", '{"entities": [], "relations": []}')
+            # A fresh store on the same connection sees the persisted row.
+            reopened = SqliteExtractionStore(conn)
+            self.assertEqual(reopened.get("k"), '{"entities": [], "relations": []}')
+            self.assertIsNone(reopened.get("missing"))
+        finally:
+            conn.close()
+
+    def test_build_extractor_wraps_llm_backends_only(self):
+        from pocketindex.ops.extract import (
+            DeterministicExtractor,
+            MemoizingExtractor,
+            OllamaExtractor,
+            build_extractor,
+        )
+
+        self.assertIsInstance(build_extractor(provider="ollama"), MemoizingExtractor)
+        self.assertIsInstance(
+            build_extractor(provider="ollama", memo=False), OllamaExtractor
+        )
+        # Deterministic stays unwrapped (pure, cheap, offline default).
+        self.assertIsInstance(build_extractor(provider="deterministic"), DeterministicExtractor)

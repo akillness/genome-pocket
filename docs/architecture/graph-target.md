@@ -20,6 +20,7 @@ work on GraphRAG and LLM-driven KG construction, pulled live from arXiv:
 |-------|--------------------------|----------------------|
 | **GraphRAG is the dominant pattern** for multi-hop / knowledge-intensive QA | *MemGraphRAG* (arXiv:2606.00610), *FlowRAG* (arXiv:2606.17856), *PathRouter* (arXiv:2606.16409) | Build a real entity–relation graph, not just entity-keyword seeds; support multi-hop traversal as a first-class retrieval mode. |
 | **Local / consumer-hardware GraphRAG is viable** | *GraphRAG on Consumer Hardware: Benchmarking Local LLMs* (arXiv:2605.20815) | Keep extraction optional and runnable against a local LLM (Ollama); never require a cloud LLM or a server graph DB. Matches Pocket's local-first/privacy DNA. |
+| **Strict-JSON output is the reliability bottleneck on small/local models** | *When Correct Isn't Usable: Improving Structured Output Reliability in Small LMs* (arXiv:2605.02363), *The Format Tax* (arXiv:2604.03616), *Schema Key Wording as an Instruction Channel* (arXiv:2604.14862) | 7-9B models hit ~85% task accuracy but **0%** valid-JSON under naive prompting — so demand an explicit JSON-only contract + one grounded exemplar + descriptive schema keys. Note the "format tax": any format demand costs reasoning accuracy, so keep the schema tight and the parser tolerant (a freeform→reformat two-pass is a deferred option). |
 | **Schema-agnostic + uncertainty-guided KG construction** | *Schema-Agnostic KG Construction via Hybrid Ontology Discovery* (arXiv:2606.01208), *Helicase: Uncertainty-Guided… Multi-Agent LLMs* (arXiv:2605.26835) | Don't hard-code an ontology. Let extraction propose entity/relation types, carry a confidence score, and gate low-confidence facts behind the HITL approval (POCKET-302). |
 | **Cost-effective LLM entity resolution via blocking + graph refinement** | *Adaptive Graph Refinement and Label Propagation with LLMs for Cost-Effective Entity Resolution* (arXiv:2605.25814), *Structure-Guided Entity Resolution* (arXiv:2605.23597) | Use cheap embedding-based **blocking** to generate candidate pairs, reserve the LLM for adjudicating only ambiguous pairs, then propagate labels across the candidate graph. Don't run O(n²) LLM comparisons. |
 | **Trust / verifiability of LLM ER decisions** | *Can we trust LLM Self-Explanations for Entity Resolution?* (arXiv:2606.01210) | Persist the evidence + rationale for each merge; surface it through the existing end-to-end lineage so a human can audit a merge before it is committed. |
@@ -121,17 +122,27 @@ A dependency-light op turns a chunk into `(entities, relations)`:
   (env-overridable, mirroring existing `EMBEDDING_MODEL`). airLLM/torch stay an **optional
   extra** (`pip install genome-pocket[airllm]`); importing the backend is lazy so the base
   install carries zero torch/transformers weight.
-- **Schema-agnostic prompt** (per arXiv:2606.01208): the model proposes entity types and
-  predicates; we do not pin an ontology. Output is strict JSON validated against a small
-  dataclass schema; malformed output → drop the chunk's extraction, log, continue (same
-  degrade-don't-crash posture as the FTS5 fallback). The deterministic backend emits the
-  same dataclass shape so downstream code is backend-agnostic.
+- **Hardened, schema-agnostic prompt** (POCKET-404b, per arXiv:2606.01208): the model
+  proposes entity types and predicates; we do not pin an ontology. The prompt is pinned by a
+  `PROMPT_VERSION` constant and instructs the model to emit STRICT JSON only (no prose/fence),
+  ground every fact in the TEXT, attach a verbatim `evidence` span, calibrate `confidence`
+  (don't flat-1.0), and use `lower_snake_case` predicates — with one grounded few-shot exemplar
+  to lift JSON validity on small local models (the structured-output reliability benchmark
+  arXiv:2605.02363, where naive prompting yields 0% valid JSON; local-LLM GraphRAG itself is
+  viable per arXiv:2605.20815). Output is validated against a small dataclass schema;
+  malformed output → drop the chunk's extraction, log, continue (same degrade-don't-crash posture
+  as the FTS5 fallback). The deterministic backend emits the same dataclass shape so downstream
+  code is backend-agnostic.
 - **Confidence + evidence** (per arXiv:2606.01210 / 2605.26835): every entity and relation
   carries a `confidence ∈ [0,1]` and a verbatim `evidence` span. These feed the HITL gate
   and lineage.
-- **Memoized:** extraction is the expensive step, so the op is `@pix.fn(memo=True)` keyed
-  on chunk text + model id + prompt-version, so unchanged chunks and unchanged prompts are
-  never re-sent to the model.
+- **Memoized** (POCKET-404b): extraction is the expensive step, so the LLM backends are wrapped
+  in a `MemoizingExtractor` keyed on `sha256(prompt_version, model_id, chunk_text)`. A
+  `SqliteExtractionStore` (table `_pocket_extract_memo` in the Pocket DB) persists the cache
+  across runs, so unchanged chunks under an unchanged prompt are never re-sent to the model;
+  bumping `PROMPT_VERSION` transparently invalidates every cached extraction. The content-hash
+  key means the cache can never return stale data. The deterministic backend is pure/cheap and
+  stays unwrapped, so default runs gain no new table.
 - **Disabled by default:** `pocket update --graph` (or `POCKET_GRAPH=1`) opts in. With the
   flag off, the pipeline is exactly today's vector/lexical pipeline — zero new cost or
   dependency for existing users.
@@ -239,7 +250,6 @@ POCKET-404 is too large as one item. Recommend splitting:
    `pocket/admin.py` + `retrieval.list_sources` extensions; no LLM yet (extraction stubbed
    by a deterministic noun-phrase extractor so the plumbing is testable offline).
 2. **POCKET-404b — LLM extraction op:** `ops/extract.py` with Ollama/airLLM backends,
-   memoization, schema-agnostic JSON + confidence/evidence.
    memoization, schema-agnostic JSON + confidence/evidence.
 3. **POCKET-404c — Entity-resolution op:** `ops/entity_resolution.py` (blocking →
    adjudication → propagation).

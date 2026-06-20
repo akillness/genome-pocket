@@ -26,11 +26,12 @@ Design stance (see the spec):
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
-from dataclasses import dataclass, field
-from typing import List, Protocol, runtime_checkable
+from dataclasses import asdict, dataclass, field
+from typing import List, Optional, Protocol, runtime_checkable
 
 
 # --------------------------------------------------------------------------- #
@@ -166,14 +167,49 @@ class DeterministicExtractor:
 
 
 # --------------------------------------------------------------------------- #
-# Strict-JSON parsing shared by the LLM backends.
+# Strict-JSON extraction prompt (POCKET-404b).
 # --------------------------------------------------------------------------- #
-_EXTRACTION_PROMPT = """You are a knowledge-graph extractor. Read the TEXT and \
-return STRICT JSON (no prose, no code fence) of the form:
-{"entities":[{"name":"...","type":"...","confidence":0.0-1.0}],
- "relations":[{"subject":"...","predicate":"...","object":"...","confidence":0.0-1.0}]}
-Propose entity types and predicates freely (schema-agnostic). Use lower_snake_case \
-predicates. Only include facts the TEXT supports.
+# PROMPT_VERSION is part of the extraction memo key: bumping it invalidates every
+# cached extraction so a prompt change forces re-extraction (see MemoizingExtractor).
+# Bump this whenever _EXTRACTION_PROMPT changes in a way that should re-run models.
+PROMPT_VERSION = "2026.1"
+
+# Hardened against the 2026 GraphRAG / KG-construction literature surveyed in
+# docs/architecture/graph-target.md §1:
+#   * STRICT JSON-only output — small local (7-9B) models reach high task accuracy
+#     yet emit *invalid* JSON without an explicit system contract: naive prompting
+#     scores 0% valid-output in the small-model structured-output reliability
+#     benchmark (arXiv:2605.02363), so we demand "no fence, no prose". Local-LLM
+#     GraphRAG is viable at all on consumer hardware per arXiv:2605.20815.
+#   * Schema-agnostic types/predicates (arXiv:2606.01208) — propose, don't pin;
+#     descriptive lower_snake_case keys also act as an instruction channel that
+#     steers generation (arXiv:2604.14862).
+#   * Calibrated confidence (uncertainty-guided KG construction, arXiv:2605.26835)
+#     so the HITL gate (POCKET-302) gets a real signal instead of a flat 1.0.
+#   * Mandatory verbatim evidence span (verifiability, arXiv:2606.01210) so every
+#     fact can be audited against its source before it is committed.
+#   * A single grounded few-shot exemplar to lift JSON validity on small models
+#     (arXiv:2605.02363) at low token cost. Caveat: any format demand carries a
+#     "format tax" on reasoning (arXiv:2604.03616) — mitigated here by a tight
+#     schema + tolerant parser; a freeform-then-reformat two-pass is a future option.
+_EXTRACTION_PROMPT = """You are a precise knowledge-graph extraction engine. \
+Read the TEXT and return ONLY a single JSON object — no prose, no markdown, no \
+code fence — matching EXACTLY this schema:
+{"entities":[{"name":str,"type":str,"confidence":number,"evidence":str}],
+ "relations":[{"subject":str,"predicate":str,"object":str,"confidence":number,"evidence":str}]}
+Rules:
+1. GROUNDING: extract only facts the TEXT explicitly supports; never invent. If \
+the TEXT supports nothing, return {"entities":[],"relations":[]}.
+2. EVIDENCE: every entity and relation MUST carry a short verbatim "evidence" \
+span copied from the TEXT that justifies it.
+3. CONFIDENCE: set "confidence" in [0,1] calibrated to how unambiguously the TEXT \
+states the fact (1.0 = explicit, lower = inferred). Do not default everything to 1.0.
+4. SCHEMA-AGNOSTIC: propose entity "type" labels and "predicate" names freely; do \
+not force a fixed ontology. Write predicates in lower_snake_case.
+5. Each relation's "subject" and "object" MUST also appear as an entity "name".
+Example
+TEXT: Pocket stores embeddings in SQLite.
+JSON: {"entities":[{"name":"Pocket","type":"Tool","confidence":1.0,"evidence":"Pocket stores embeddings in SQLite."},{"name":"SQLite","type":"Tool","confidence":1.0,"evidence":"Pocket stores embeddings in SQLite."}],"relations":[{"subject":"Pocket","predicate":"stores_embeddings_in","object":"SQLite","confidence":0.9,"evidence":"Pocket stores embeddings in SQLite."}]}
 TEXT:
 """
 
@@ -193,9 +229,8 @@ def parse_extraction_json(raw: str, evidence: str) -> Extraction:
     that isn't the expected object shape so the caller can degrade gracefully.
     """
     text = raw.strip()
-    if text.startswith(""):
-        text = re.sub(r"^[a-zA-Z]*\n?|\n?$", "", text).strip()
-    # Grab the outermost JSON object if the model wrapped it in prose.
+    # Grab the outermost JSON object — this alone tolerates a leading/trailing
+    # code fence or prose wrapper, so no brittle pre-strip pass is needed.
     start, end = text.find("{"), text.rfind("}")
     if start == -1 or end == -1 or end < start:
         raise ValueError("no JSON object found in model output")
@@ -232,6 +267,137 @@ def parse_extraction_json(raw: str, evidence: str) -> Extraction:
             )
         )
     return Extraction(entities=entities, relations=relations)
+# --------------------------------------------------------------------------- #
+# Extraction memoization (POCKET-404b).
+# --------------------------------------------------------------------------- #
+# Extraction is the one genuinely expensive step in the graph branch. The engine
+# already memoizes at the *file* level, but any edit re-extracts a file's whole
+# chunk set. A per-(chunk-text, model, prompt-version) cache means only the chunks
+# that actually changed — and only when the prompt changed — are re-sent to the
+# model. The key folds in PROMPT_VERSION so a prompt edit transparently invalidates.
+def extraction_to_dict(ext: Extraction) -> dict:
+    """Serialize an :class:`Extraction` to a JSON-safe dict (for caching)."""
+    return asdict(ext)
+
+
+def extraction_from_dict(data: dict) -> Extraction:
+    """Rebuild an :class:`Extraction` from :func:`extraction_to_dict` output.
+
+    Inputs come only from our own cache (written by :func:`extraction_to_dict`),
+    so a plain ``**`` splat is safe; a corrupt/legacy row raises and the caller
+    in :class:`MemoizingExtractor` falls through to a fresh extraction.
+    """
+    return Extraction(
+        entities=[ExtractedEntity(**e) for e in data.get("entities", [])],
+        relations=[ExtractedRelation(**r) for r in data.get("relations", [])],
+    )
+
+
+def extraction_cache_key(text: str, model_id: str, prompt_version: str) -> str:
+    """Deterministic cache key over (chunk text, model, prompt version)."""
+    # NUL joins fields so no value can bleed into the next (lengths vary freely).
+    payload = "\x00".join((prompt_version, model_id, text)).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
+@runtime_checkable
+class ExtractionStore(Protocol):
+    """A tiny key→JSON store backing :class:`MemoizingExtractor`."""
+
+    def get(self, key: str) -> Optional[str]:  # pragma: no cover - protocol
+        ...
+
+    def set(self, key: str, value: str) -> None:  # pragma: no cover - protocol
+        ...
+
+
+class InMemoryExtractionStore:
+    """Process-lifetime cache — dedupes repeated chunks within a single run."""
+
+    def __init__(self) -> None:
+        self._data: dict[str, str] = {}
+
+    def get(self, key: str) -> Optional[str]:
+        return self._data.get(key)
+
+    def set(self, key: str, value: str) -> None:
+        self._data[key] = value
+
+
+class SqliteExtractionStore:
+    """Persistent extraction cache in the Pocket SQLite DB.
+
+    Survives restarts so an unchanged chunk under an unchanged prompt is never
+    re-sent to the model across runs. Keyed by a content hash, it can never
+    return stale data: a changed chunk, model, or PROMPT_VERSION yields a new key.
+    """
+
+    _TABLE = "_pocket_extract_memo"
+
+    def __init__(self, conn) -> None:
+        self.conn = conn
+        self.conn.execute(
+            f"CREATE TABLE IF NOT EXISTS {self._TABLE} "
+            "(key TEXT PRIMARY KEY, value TEXT NOT NULL)"
+        )
+        self.conn.commit()
+
+    def get(self, key: str) -> Optional[str]:
+        row = self.conn.execute(
+            f"SELECT value FROM {self._TABLE} WHERE key = ?", (key,)
+        ).fetchone()
+        return row[0] if row else None
+
+    def set(self, key: str, value: str) -> None:
+        self.conn.execute(
+            f"INSERT OR REPLACE INTO {self._TABLE} (key, value) VALUES (?, ?)",
+            (key, value),
+        )
+        self.conn.commit()
+
+
+class MemoizingExtractor:
+    """Wraps any :class:`ExtractionModel`, caching results by content/model/prompt.
+
+    ``misses`` counts how many times the wrapped model was actually invoked, which
+    is what tests assert on and what the run stats surface as real model calls.
+    """
+
+    def __init__(
+        self,
+        inner: ExtractionModel,
+        store: Optional[ExtractionStore] = None,
+        prompt_version: str = PROMPT_VERSION,
+    ) -> None:
+        self.inner = inner
+        self.store = store if store is not None else InMemoryExtractionStore()
+        self.prompt_version = prompt_version
+        self.model_id = str(
+            getattr(inner, "model", None)
+            or getattr(inner, "model_id", None)
+            or getattr(inner, "name", "unknown")
+        )
+        self.name = f"memoized:{getattr(inner, 'name', 'extractor')}"
+        self.misses = 0
+
+    def extract(self, text: str) -> Extraction:
+        key = extraction_cache_key(text, self.model_id, self.prompt_version)
+        cached = self.store.get(key)
+        if cached is not None:
+            try:
+                return extraction_from_dict(json.loads(cached))
+            except (ValueError, KeyError, TypeError, json.JSONDecodeError):
+                pass  # corrupt/legacy cache entry → fall through and re-extract
+        self.misses += 1
+        result = self.inner.extract(text)
+        try:
+            self.store.set(key, json.dumps(extraction_to_dict(result)))
+        except Exception as exc:  # noqa: BLE001 - cache write must never break a run
+            print(f"[pocketindex.extract] extraction cache write failed: {exc}")
+        return result
+
+
+
 
 
 # --------------------------------------------------------------------------- #
@@ -298,7 +464,7 @@ class AirLLMExtractor:
         self,
         model: str = "garage-bAInd/Platypus2-70B-instruct",
         max_new_tokens: int = 512,
-        max_input_tokens: int = 1024,
+        max_input_tokens: int = 2048,
         compression: str | None = None,
         device: str | None = None,
     ):
@@ -368,24 +534,41 @@ class AirLLMExtractor:
 # Factory: pick a backend from config / env.
 # --------------------------------------------------------------------------- #
 def build_extractor(
-    provider: str | None = None, model: str | None = None
+    provider: str | None = None,
+    model: str | None = None,
+    *,
+    memo: bool = True,
+    store: Optional[ExtractionStore] = None,
 ) -> ExtractionModel:
     """Construct an :class:`ExtractionModel` from a provider name.
 
     ``provider`` defaults to ``$POCKET_LLM_PROVIDER`` or ``"deterministic"`` so the
     pipeline is fully functional and offline-testable with no configuration. The
     deterministic backend is also the safe fallback for an unknown provider.
+
+    The LLM backends (``ollama`` / ``airllm``) are wrapped in a
+    :class:`MemoizingExtractor` when ``memo`` is set (default), keyed on
+    (chunk text, model, ``PROMPT_VERSION``) so unchanged chunks under an unchanged
+    prompt are never re-sent to the model. Pass ``store`` to persist the cache
+    (e.g. a :class:`SqliteExtractionStore`); otherwise it is process-lifetime.
+    The deterministic backend is pure and cheap, so it is returned unwrapped.
     """
     provider = (provider or os.getenv("POCKET_LLM_PROVIDER") or "deterministic").lower()
     model = model or os.getenv("POCKET_LLM_MODEL")
 
+    backend: ExtractionModel
     if provider == "ollama":
-        return OllamaExtractor(model=model or "llama3")
-    if provider == "airllm":
-        return AirLLMExtractor(model=model or "garage-bAInd/Platypus2-70B-instruct")
-    if provider != "deterministic":
-        print(
-            f"[pocketindex.extract] unknown POCKET_LLM_PROVIDER='{provider}', "
-            f"falling back to deterministic extractor."
-        )
-    return DeterministicExtractor()
+        backend = OllamaExtractor(model=model or "llama3")
+    elif provider == "airllm":
+        backend = AirLLMExtractor(model=model or "garage-bAInd/Platypus2-70B-instruct")
+    else:
+        if provider != "deterministic":
+            print(
+                f"[pocketindex.extract] unknown POCKET_LLM_PROVIDER='{provider}', "
+                f"falling back to deterministic extractor."
+            )
+        return DeterministicExtractor()
+
+    if memo:
+        return MemoizingExtractor(backend, store=store)
+    return backend

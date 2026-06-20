@@ -12,6 +12,22 @@ by installing it in an isolated venv and diffing its public API against the
 vendored `pocketindex` engine.
 
 ### Added
+- **Hardened JSON extraction prompt + extraction memoization (POCKET-404b).**
+  `pocketindex/ops/extract.py` now pins the strict-JSON extraction prompt behind a
+  `PROMPT_VERSION` constant with explicit JSON-only / grounding / verbatim-evidence /
+  calibrated-confidence directives and a grounded few-shot exemplar, drawn from the
+  2026 GraphRAG and structured-output literature. The strict-JSON-only contract and the
+  single grounded exemplar are grounded in the small-model structured-output reliability
+  benchmark (arXiv:2605.02363, where naive prompting yields 0% valid JSON), with the
+  "format tax" caveat noted (arXiv:2604.03616); schema-agnostic typing/keys follow
+  arXiv:2606.01208 / 2604.14862, calibrated confidence arXiv:2605.26835, verifiable
+  evidence arXiv:2606.01210, and local-LLM viability arXiv:2605.20815. The Ollama/airLLM
+  backends are wrapped in a
+  new `MemoizingExtractor` keyed on `sha256(prompt_version, model_id, chunk_text)`,
+  persisted via `SqliteExtractionStore` (`_pocket_extract_memo` table) so unchanged
+  chunks under an unchanged prompt are never re-sent to the model across runs; bumping
+  `PROMPT_VERSION` invalidates the cache. The deterministic backend stays unwrapped, so
+  default runs gain no new table. Tests: `TestExtractionPromptAndMemo` (5).
 - **Run statistics / monitoring (POCKET-401).** New `pocketindex/stats.py`
   (`UpdateStats` / `ComponentStats`) tracks adds / reprocesses / unchanged /
   deletes / errors per component. Stats are threaded through `mount_each` and

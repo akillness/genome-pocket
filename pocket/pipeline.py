@@ -11,7 +11,7 @@ from pocketindex.ops.sentence_transformers import SentenceTransformerEmbedder
 from pocketindex.resources.file import FileLike
 from pocketindex.ops.text import RecursiveSplitter, detect_code_language
 from pocketindex.ops.refine import TextRefiner
-from pocketindex.ops.extract import build_extractor, ExtractedEntity
+from pocketindex.ops.extract import build_extractor, ExtractedEntity, SqliteExtractionStore
 from pocketindex.ops.entity_resolution import resolve_entities, normalize
 from pocketindex.resources.id import IdGenerator
 from pocketindex.resources.chunk import Chunk
@@ -149,7 +149,15 @@ async def extract_graph_file(
     filename = file.file_path.path
     chunks = _chunk_file(raw_text, filename)
 
-    extractor = build_extractor(config.POCKET_LLM_PROVIDER, config.POCKET_LLM_MODEL)
+    # Persist the extraction cache (POCKET-404b) in the same SQLite DB for the
+    # LLM backends so an unchanged chunk under an unchanged prompt is never
+    # re-sent across runs. The deterministic backend is pure/cheap and stays
+    # unwrapped, so default runs gain no new table.
+    provider = (config.POCKET_LLM_PROVIDER or "deterministic").lower()
+    store = None
+    if provider in ("ollama", "airllm"):
+        store = SqliteExtractionStore(pix.use_context(SQLITE_DB).conn)
+    extractor = build_extractor(provider, config.POCKET_LLM_MODEL, store=store)
     id_gen = IdGenerator()
 
     # Collect every extracted entity across the file's chunks, remembering which

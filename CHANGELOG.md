@@ -12,7 +12,26 @@ by installing it in an isolated venv and diffing its public API against the
 vendored `pocketindex` engine.
 
 ### Added
+- **Automated retrieval evaluation & regression guard (POCKET-303).** New
+  `pocket/evaluation.py` plus a `pocket eval` command turn retrieval quality into
+  a measurable, CI-gateable number so changing chunk sizes, the embedding model,
+  or fusion weights can't silently regress recall. It computes standard IR metrics
+  (Hit@k, MRR, Precision/Recall@k, MAP) over either a hand-written gold set
+  (`--cases <json>`, `{query, relevant_files[, mode]}`) or **synthetic query/context
+  pairs mined from the existing index** (`synthesize_cases()`): for each source file
+  it picks the tokens most *distinctive* to it (lowest cross-file document
+  frequency) and builds a self-labeled query whose only correct answer is that
+  file, so no curated gold set is required and any indexing/chunking regression
+  shows up as a dropped hit. `evaluate()` calls the real `retrieval.search()` (per
+  case `mode`), so the harness can never drift from production retrieval.
+  `save_baseline()`/`compare_to_baseline()` (with a `--tolerance`) record a run and
+  fail `pocket eval --baseline <json>` (exit 1) on any metric that fell below it.
+  Tests: metric primitives + lenient path matching, synthetic self-retrieval at
+  perfect Hit@k/MRR, empty-index safety, gold-case JSON parsing + validation
+  errors, baseline round-trip + tolerance-aware regression detection, and the CLI
+  end-to-end (synthesize → save → pass → doctored-baseline fail) (6).
 - **Local query-tracing & lineage web UI (POCKET-301 slice).** `pocket serve` now
+
   serves a single, dependency-free HTML page at `GET /` (`pocket/web_ui.py`) that
   visualizes *how a query was routed* and *which source files answered it*. A new
   `retrieval.routing_trace()` is the testable core: it reuses the same

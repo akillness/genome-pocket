@@ -1126,5 +1126,224 @@ class TestGraphTarget(unittest.TestCase):
         res = runner.invoke(cli_module.cli, ["update", "--review"])
         self.assertEqual(res.exit_code, 0, res.output)
         self.assertIn("no effect without --graph", res.output)
+class TestRetrievalEvaluation(unittest.TestCase):
+    """POCKET-303: automated retrieval evaluation & regression guard."""
+
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.source_dir = pathlib.Path(self.temp_dir.name) / "notes"
+        self.source_dir.mkdir()
+        self.db_path = pathlib.Path(self.temp_dir.name) / "pocket_data.db"
+
+        self.old_db_env = os.environ.get("POCKET_SQLITE_DB")
+        os.environ["POCKET_SQLITE_DB"] = str(self.db_path)
+        if "pocket.config" in sys.modules:
+            importlib.reload(sys.modules["pocket.config"])
+        for mod in ("pocket.retrieval", "pocket.evaluation"):
+            if mod in sys.modules:
+                importlib.reload(sys.modules[mod])
+
+        # Three notes with deliberately disjoint vocabulary so distinctive-token
+        # synthetic queries have exactly one correct source under lexical search.
+        (self.source_dir / "biology.md").write_text(
+            "# Biology\n\nPhotosynthesis converts sunlight via chlorophyll into "
+            "glucose inside chloroplasts.\n"
+        )
+        (self.source_dir / "geology.md").write_text(
+            "# Geology\n\nVolcanic eruption ejects magma forming basalt across "
+            "tectonic boundaries.\n"
+        )
+        (self.source_dir / "crypto.md").write_text(
+            "# Cryptography\n\nEncryption ciphers maximize entropy protecting "
+            "asymmetric keypairs.\n"
+        )
+
+    def tearDown(self):
+        if self.old_db_env is not None:
+            os.environ["POCKET_SQLITE_DB"] = self.old_db_env
+        else:
+            os.environ.pop("POCKET_SQLITE_DB", None)
+        if "pocket.config" in sys.modules:
+            importlib.reload(sys.modules["pocket.config"])
+        self.temp_dir.cleanup()
+
+    def _run(self):
+        from pocket.pipeline import app_main
+        app = pix.App(
+            "pocket_test", app_main, sourcedir=self.source_dir, db_path=self.db_path
+        )
+        app.update_blocking(live=False, report_to_stdout=False)
+
+    def test_metric_primitives(self):
+        from pocket import evaluation as ev
+
+        retrieved = ["a.md", "b.md", "c.md", "d.md"]
+        relevant = ["c.md"]
+        # First relevant hit is at rank 3.
+        self.assertAlmostEqual(ev.reciprocal_rank(retrieved, relevant), 1 / 3)
+        self.assertEqual(ev.reciprocal_rank(retrieved, ["zzz.md"]), 0.0)
+        # 1 of the top-4 is relevant; recall is 1 of 1 relevant file.
+        self.assertAlmostEqual(ev.precision_at_k(retrieved, relevant, 4), 1 / 4)
+        self.assertAlmostEqual(ev.recall_at_k(retrieved, relevant, 4), 1.0)
+        # Cutoff below the hit drops both precision and recall to zero.
+        self.assertEqual(ev.recall_at_k(retrieved, relevant, 2), 0.0)
+        # AP: single relevant at rank 3 -> precision 1/3 averaged over 1 relevant.
+        self.assertAlmostEqual(ev.average_precision(retrieved, relevant, 4), 1 / 3)
+        # Two relevant files ranked 1 and 2 -> perfect AP.
+        self.assertAlmostEqual(
+            ev.average_precision(["c.md", "d.md", "a.md"], ["c.md", "d.md"], 3), 1.0
+        )
+        # Lenient path matching: basename / relative-suffix counts as a hit.
+        self.assertEqual(
+            ev.reciprocal_rank(["/abs/path/crypto.md"], ["crypto.md"]), 1.0
+        )
+
+    def test_synthesize_and_evaluate_self_retrieves(self):
+        from pocket import evaluation as ev
+
+        self._run()
+        cases = ev.synthesize_cases(db_path=self.db_path, mode="lexical", per_file=1)
+        # One self-labeled case per indexed source file.
+        self.assertEqual(len(cases), 3)
+        for c in cases:
+            self.assertEqual(len(c.relevant_files), 1)
+            self.assertTrue(c.query.strip())
+            self.assertEqual(c.mode, "lexical")
+
+        metrics = ev.evaluate(cases, db_path=self.db_path, k=5)
+        # Distinctive-token queries must each retrieve their own source first,
+        # so a healthy lexical index scores a perfect hit rate and MRR.
+        self.assertEqual(metrics.n_cases, 3)
+        self.assertEqual(metrics.hit_rate, 1.0)
+        self.assertEqual(metrics.mrr, 1.0)
+        self.assertEqual(metrics.recall_at_k, 1.0)
+        for cr in metrics.cases:
+            self.assertTrue(cr.hit)
+            self.assertTrue(
+                any(
+                    os.path.basename(cr.relevant_files[0]) == os.path.basename(f)
+                    for f in cr.retrieved_files
+                )
+            )
+
+    def test_synthesize_empty_when_no_index(self):
+        from pocket import evaluation as ev
+
+        # No _run(): the DB does not exist yet.
+        self.assertEqual(ev.synthesize_cases(db_path=self.db_path), [])
+        # evaluate() over no cases yields zeroed metrics, not a crash.
+        metrics = ev.evaluate([], db_path=self.db_path, k=5)
+        self.assertEqual(metrics.n_cases, 0)
+        self.assertEqual(metrics.hit_rate, 0.0)
+
+    def test_load_cases_parsing_and_errors(self):
+        import json
+
+        from pocket import evaluation as ev
+
+        good = pathlib.Path(self.temp_dir.name) / "cases.json"
+        good.write_text(
+            json.dumps(
+                {
+                    "cases": [
+                        {"query": "encryption keys", "relevant_files": ["crypto.md"]},
+                        {
+                            "query": "magma basalt",
+                            "relevant_files": ["geology.md"],
+                            "mode": "lexical",
+                        },
+                    ]
+                }
+            )
+        )
+        cases = ev.load_cases(good)
+        self.assertEqual(len(cases), 2)
+        self.assertEqual(cases[0].mode, "hybrid")  # default
+        self.assertEqual(cases[1].mode, "lexical")
+
+        # Top-level list form is accepted too.
+        listform = pathlib.Path(self.temp_dir.name) / "list.json"
+        listform.write_text(
+            json.dumps([{"query": "q", "relevant_files": ["a.md"]}])
+        )
+        self.assertEqual(len(ev.load_cases(listform)), 1)
+
+        bad = pathlib.Path(self.temp_dir.name) / "bad.json"
+        bad.write_text(json.dumps([{"relevant_files": ["a.md"]}]))  # no query
+        with self.assertRaises(ValueError):
+            ev.load_cases(bad)
+        bad.write_text(json.dumps([{"query": "q", "relevant_files": []}]))  # empty rel
+        with self.assertRaises(ValueError):
+            ev.load_cases(bad)
+
+    def test_baseline_roundtrip_and_regression_detection(self):
+        from pocket import evaluation as ev
+
+        self._run()
+        cases = ev.synthesize_cases(db_path=self.db_path, mode="lexical")
+        metrics = ev.evaluate(cases, db_path=self.db_path, k=5)
+
+        baseline_path = pathlib.Path(self.temp_dir.name) / "baseline.json"
+        ev.save_baseline(baseline_path, metrics)
+        loaded = ev.load_baseline(baseline_path)
+        self.assertEqual(loaded["hit_rate"], metrics.hit_rate)
+        self.assertNotIn("cases", loaded)  # baselines store aggregates only
+
+        # Identical run -> no regression.
+        self.assertEqual(ev.compare_to_baseline(metrics, loaded), [])
+
+        # A stricter baseline that the run no longer meets -> regression flagged.
+        harder = dict(loaded)
+        harder["hit_rate"] = loaded["hit_rate"] + 0.5
+        regs = ev.compare_to_baseline(metrics, harder)
+        names = {r.metric for r in regs}
+        self.assertIn("hit_rate", names)
+        reg = next(r for r in regs if r.metric == "hit_rate")
+        self.assertLess(reg.delta, 0.0)
+        # Tolerance can absorb the same drop.
+        self.assertEqual(ev.compare_to_baseline(metrics, harder, tolerance=1.0), [])
+        # Metrics absent from the baseline never fail.
+        self.assertEqual(ev.compare_to_baseline(metrics, {"unknown": 1.0}), [])
+
+    def test_cli_eval_synthetic_and_baseline(self):
+        import pocket.cli as cli_module
+        from click.testing import CliRunner
+
+        importlib.reload(cli_module)
+        self._run()
+        runner = CliRunner()
+
+        baseline_path = pathlib.Path(self.temp_dir.name) / "cli_baseline.json"
+        res = runner.invoke(
+            cli_module.cli,
+            ["eval", "--mode", "lexical", "--save", str(baseline_path), "--show-cases"],
+        )
+        self.assertEqual(res.exit_code, 0, res.output)
+        self.assertIn("Synthesized 3 case(s)", res.output)
+        self.assertIn("Hit@5:", res.output)
+        self.assertTrue(baseline_path.exists())
+
+        # Re-running against the just-saved baseline must pass (no regression).
+        res = runner.invoke(
+            cli_module.cli,
+            ["eval", "--mode", "lexical", "--baseline", str(baseline_path)],
+        )
+        self.assertEqual(res.exit_code, 0, res.output)
+        self.assertIn("No regression versus baseline", res.output)
+
+        # A doctored baseline the run can't meet must fail the command (exit 1).
+        import json
+
+        data = json.loads(baseline_path.read_text())
+        data["hit_rate"] = 1.5
+        baseline_path.write_text(json.dumps(data))
+        res = runner.invoke(
+            cli_module.cli,
+            ["eval", "--mode", "lexical", "--baseline", str(baseline_path)],
+        )
+        self.assertEqual(res.exit_code, 1, res.output)
+        self.assertIn("REGRESSION", res.output)
+
+
 if __name__ == "__main__":
     unittest.main()

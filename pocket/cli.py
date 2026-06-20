@@ -203,6 +203,96 @@ def search(query, limit, mode):
     click.echo(retrieval.format_hits(hits))
 
 
+@cli.command(name="eval")
+@click.option("--k", default=5, type=int, help="Cutoff rank for the metrics (top-k).")
+@click.option(
+    "--mode",
+    type=click.Choice(["hybrid", "vector", "lexical", "graph"]),
+    default="lexical",
+    help="Retrieval mode for synthetic cases (loaded cases keep their own mode). "
+    "Defaults to lexical: distinctive-token probes are deterministic there.",
+)
+@click.option(
+    "--cases",
+    "cases_file",
+    type=click.Path(exists=True, dir_okay=False),
+    default=None,
+    help="JSON file of hand-written {query, relevant_files[, mode]} cases. "
+    "Without it, cases are synthesized from the index.",
+)
+@click.option(
+    "--per-file", default=1, type=int, help="Synthetic queries to build per source."
+)
+@click.option(
+    "--baseline",
+    "baseline_file",
+    type=click.Path(dir_okay=False),
+    default=None,
+    help="Compare this run against a saved baseline; exit non-zero on regression.",
+)
+@click.option(
+    "--save",
+    "save_file",
+    type=click.Path(dir_okay=False),
+    default=None,
+    help="Write this run's aggregate metrics as a new baseline.",
+)
+@click.option(
+    "--tolerance",
+    default=0.0,
+    type=float,
+    help="Allowed drop versus baseline before a metric counts as a regression.",
+)
+@click.option("--show-cases", is_flag=True, help="Print per-case hit/miss detail.")
+def eval_cmd(k, mode, cases_file, per_file, baseline_file, save_file, tolerance, show_cases):
+    """Evaluate retrieval quality and guard against regressions (POCKET-303).
+
+    Runs standard IR metrics (Hit@k, MRR, Precision/Recall@k, MAP) over either a
+    hand-written gold set (--cases) or query/context pairs synthesized from the
+    current index. With --baseline it fails (exit 1) if any metric regressed; with
+    --save it records the run as a new baseline.
+    """
+    from pocket import evaluation
+
+    if not POCKET_SQLITE_DB.exists():
+        click.echo("Database does not exist. Please run 'pocket update' first.")
+        raise SystemExit(1)
+
+    if cases_file:
+        cases = evaluation.load_cases(pathlib.Path(cases_file))
+        click.echo(f"Loaded {len(cases)} case(s) from {cases_file}.")
+    else:
+        cases = evaluation.synthesize_cases(mode=mode, per_file=per_file)
+        click.echo(f"Synthesized {len(cases)} case(s) from the index (mode={mode}).")
+
+    if not cases:
+        click.echo("No evaluation cases available (empty index or no cases).")
+        raise SystemExit(1)
+
+    metrics = evaluation.evaluate(cases, k=k)
+    click.echo(evaluation.format_report(metrics, show_cases=show_cases))
+
+    if save_file:
+        evaluation.save_baseline(pathlib.Path(save_file), metrics)
+        click.echo(f"\nSaved baseline to {save_file}.")
+
+    if baseline_file:
+        if not pathlib.Path(baseline_file).exists():
+            click.echo(f"\nBaseline {baseline_file} not found; nothing to compare.")
+            raise SystemExit(1)
+        baseline = evaluation.load_baseline(pathlib.Path(baseline_file))
+        regressions = evaluation.compare_to_baseline(metrics, baseline, tolerance)
+        if regressions:
+            click.echo("\nREGRESSION versus baseline:")
+            for r in regressions:
+                click.echo(
+                    f"  {r.metric}: {r.baseline:.4f} -> {r.current:.4f} "
+                    f"({r.delta:+.4f})"
+                )
+            raise SystemExit(1)
+        click.echo("\nNo regression versus baseline.")
+
+
 @cli.command()
 @click.option("--host", default="127.0.0.1", help="Host to bind the API server to.")
 @click.option("--port", default=8000, type=int, help="Port to bind the API server to.")

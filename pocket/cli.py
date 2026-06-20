@@ -54,9 +54,21 @@ def init():
     help="Also extract a knowledge graph (entities/relations) from notes. "
     "Opt-in; uses the local extractor selected by POCKET_LLM_PROVIDER.",
 )
-def update(live, interval, graph):
+@click.option(
+    "--review",
+    is_flag=True,
+    help="After a --graph build, interactively approve/reject facts the "
+    "confidence gate staged as pending (HITL). Ignored without --graph or "
+    "in live mode; use 'pocket graph review' for the non-interactive flow.",
+)
+def update(live, interval, graph, review):
     """Run the indexing pipeline to process notes."""
     click.echo(f"Starting indexing pipeline (live={live}, graph={graph})...")
+
+    if review and not graph:
+        click.echo("--review has no effect without --graph; ignoring it.")
+    if review and graph and live:
+        click.echo("--review is skipped in live mode; run 'pocket graph review' later.")
 
     # Create the app using the default environment (which has the lifespan registered)
     app = pix.App(
@@ -81,6 +93,93 @@ def update(live, interval, graph):
         )
     else:
         click.echo("Indexing pipeline completed.")
+
+    if review and graph and not live:
+        _interactive_graph_review()
+
+
+def _interactive_graph_review(echo=click.echo, prompt=click.prompt):
+    """Walk the operator through facts the confidence gate staged as pending.
+
+    Reuses the same ``pocket.admin`` review API as ``pocket graph review`` so
+    the inline (POCKET-301) and post-hoc flows stay consistent. Offers a bulk
+    approve/reject/each/skip choice; ``each`` prompts per fact (approve / reject
+    / leave-pending). Anything left unresolved stays pending for later review.
+    """
+    from pocket import admin
+
+    pending = admin.list_pending()
+    ents, rels = pending["entities"], pending["relations"]
+    if not ents and not rels:
+        echo("No graph facts are pending review.")
+        return
+
+    echo(f"\n{len(ents) + len(rels)} fact(s) staged by the confidence gate:")
+    for e in ents:
+        echo(
+            f"  [{e['id']}] {e['name']} ({e['type']}) "
+            f"conf={e['confidence']:.2f}  {e['source_file']}"
+        )
+    for r in rels:
+        echo(
+            f"  [{r['id']}] {r['subject']} -{r['predicate']}-> {r['object']} "
+            f"conf={r['confidence']:.2f}  {r['source_file']}"
+        )
+
+    choice = (
+        prompt(
+            "Review staged facts? [a]pprove all / [r]eject all / [e]ach / [s]kip",
+            default="s",
+            show_default=False,
+        )
+        .strip()
+        .lower()
+    )
+    if choice in ("a", "approve"):
+        c = admin.approve_pending(ids=None)
+        echo(f"Approved {c['entities']} entit(y/ies), {c['relations']} relation(s).")
+        return
+    if choice in ("r", "reject"):
+        c = admin.reject_pending(ids=None)
+        echo(f"Rejected {c['entities']} entit(y/ies), {c['relations']} relation(s).")
+        return
+    if choice not in ("e", "each"):
+        echo("Skipped. Run 'pocket graph review' later to resolve pending facts.")
+        return
+
+    approve_ids, reject_ids = [], []
+    aborted = False
+    for label, items in (("entity", ents), ("relation", rels)):
+        if aborted:
+            break
+        for item in items:
+            ans = (
+                prompt(
+                    f"  [{item['id']}] {label}: [y]approve / [n]reject / "
+                    "[s]kip / [q]uit",
+                    default="s",
+                    show_default=False,
+                )
+                .strip()
+                .lower()
+            )
+            if ans in ("q", "quit"):
+                aborted = True
+                break
+            if ans in ("y", "yes"):
+                approve_ids.append(item["id"])
+            elif ans in ("n", "no"):
+                reject_ids.append(item["id"])
+            # anything else: leave pending
+
+    approved = admin.approve_pending(ids=approve_ids) if approve_ids else {"entities": 0, "relations": 0}
+    rejected = admin.reject_pending(ids=reject_ids) if reject_ids else {"entities": 0, "relations": 0}
+    left = (len(ents) + len(rels)) - len(approve_ids) - len(reject_ids)
+    echo(
+        f"Approved {approved['entities'] + approved['relations']}, "
+        f"rejected {rejected['entities'] + rejected['relations']}, "
+        f"{left} still pending."
+    )
 
 @cli.command()
 @click.argument("query")

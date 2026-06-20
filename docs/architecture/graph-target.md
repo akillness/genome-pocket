@@ -214,7 +214,10 @@ implementation ticket.)
   `status="pending"`, not committed, and stay out of every graph read until
   `pocket graph review` approves them (`--approve`/`--reject <id>`, `--approve-all`/
   `--reject-all`) — matching the ops-layer.md HITL design and the uncertainty-guided
-  stance from arXiv:2605.26835. An interactive in-update prompt is the remaining slice.
+  stance from arXiv:2605.26835. An interactive in-update prompt now also ships:
+  `pocket update --graph --review` (POCKET-301 slice) walks the operator through the
+  staged facts inline (bulk approve-all/reject-all/each/skip, with a per-fact loop in
+  *each* mode) over the same `admin` review API.
 - **Lineage:** every node/edge stores its source file, chunk id, evidence span, and (for
   merges) the resolution rationale — so the ops-layer "retrieval lineage" block extends to
   graph facts.

@@ -856,5 +856,185 @@ class TestGraphTarget(unittest.TestCase):
         self.assertEqual(res.exit_code, 0, res.output)
         self.assertIn("Pocket", res.output)
         self.assertIn("Relations", res.output)
+
+    # --- POCKET-301: interactive review during `pocket update --graph` ----
+    @staticmethod
+    def _scripted(answers):
+        """A click.prompt stand-in returning queued answers in order."""
+        it = iter(answers)
+
+        def _p(*args, **kwargs):
+            return next(it)
+
+        return _p
+
+    def test_interactive_review_approve_all_commits(self):
+        import pocket.cli as cli_module
+
+        self._set_min_conf("0.9")
+        importlib.reload(cli_module)
+        self._run(graph=True)
+        from pocket import admin, retrieval
+
+        out = []
+        cli_module._interactive_graph_review(
+            echo=out.append, prompt=self._scripted(["a"])
+        )
+        joined = "\n".join(out)
+        self.assertIn("staged by the confidence gate", joined)
+        self.assertIn("Approved", joined)
+        # Everything committed: nothing pending, and now retrievable.
+        self.assertEqual(admin.list_pending(db_path=self.db_path)["entities"], [])
+        node = retrieval.graph_neighborhood("Pocket", db_path=self.db_path)
+        self.assertTrue(node)
+
+    def test_interactive_review_each_mode_routes_per_fact(self):
+        import pocket.cli as cli_module
+
+        self._set_min_conf("0.9")
+        importlib.reload(cli_module)
+        self._run(graph=True)
+        from pocket import admin
+
+        pending = admin.list_pending(db_path=self.db_path)
+        items = pending["entities"] + pending["relations"]
+        self.assertGreaterEqual(len(items), 3)
+
+        # Top choice "e" (each), then approve / reject / leave-pending per fact.
+        answers = ["e"]
+        expect_approve, expect_reject, expect_skip = [], [], []
+        for i, item in enumerate(items):
+            if i == len(items) - 1:
+                answers.append("s")
+                expect_skip.append(item["id"])
+            elif i % 2 == 0:
+                answers.append("y")
+                expect_approve.append(item["id"])
+            else:
+                answers.append("n")
+                expect_reject.append(item["id"])
+
+        out = []
+        cli_module._interactive_graph_review(
+            echo=out.append, prompt=self._scripted(answers)
+        )
+
+        # Skipped facts stay pending; approved/rejected leave the queue.
+        remaining = admin.list_pending(db_path=self.db_path)
+        remaining_ids = {e["id"] for e in remaining["entities"]} | {
+            r["id"] for r in remaining["relations"]
+        }
+        self.assertEqual(remaining_ids, set(expect_skip))
+
+        conn = self._conn()
+        try:
+            # Approved entity ids are committed (status flipped).
+            for table in ("entities", "relations"):
+                rows = {
+                    r[0]: r[1]
+                    for r in conn.execute(f"SELECT id, status FROM {table}").fetchall()
+                }
+                for rid, status in rows.items():
+                    if rid in expect_approve:
+                        self.assertEqual(status, "approved")
+                # Rejected ids are deleted outright.
+                for rid in expect_reject:
+                    self.assertNotIn(rid, rows)
+        finally:
+            conn.close()
+        self.assertIn("still pending", "\n".join(out))
+
+    def test_interactive_review_quit_stops_each_loop(self):
+        import pocket.cli as cli_module
+
+        self._set_min_conf("0.9")
+        importlib.reload(cli_module)
+        self._run(graph=True)
+        from pocket import admin
+
+        before = admin.list_pending(db_path=self.db_path)
+        total_before = len(before["entities"]) + len(before["relations"])
+        # each-mode, approve the first fact, then quit: the rest stay pending.
+        out = []
+        cli_module._interactive_graph_review(
+            echo=out.append, prompt=self._scripted(["e", "y", "q"])
+        )
+        after = admin.list_pending(db_path=self.db_path)
+        total_after = len(after["entities"]) + len(after["relations"])
+        self.assertEqual(total_after, total_before - 1)
+
+    def test_interactive_review_skip_leaves_everything_pending(self):
+        import pocket.cli as cli_module
+
+        self._set_min_conf("0.9")
+        importlib.reload(cli_module)
+        self._run(graph=True)
+        from pocket import admin
+
+        before = admin.list_pending(db_path=self.db_path)
+        out = []
+        cli_module._interactive_graph_review(
+            echo=out.append, prompt=self._scripted(["s"])
+        )
+        after = admin.list_pending(db_path=self.db_path)
+        self.assertEqual(len(after["entities"]), len(before["entities"]))
+        self.assertEqual(len(after["relations"]), len(before["relations"]))
+        self.assertIn("Skipped", "\n".join(out))
+
+    def test_interactive_review_no_pending_does_not_prompt(self):
+        import pocket.cli as cli_module
+
+        importlib.reload(cli_module)
+        # Default threshold: every fact is committed, so nothing is pending.
+        self._run(graph=True)
+
+        def _boom(*args, **kwargs):
+            raise AssertionError("prompt should not be called when nothing pending")
+
+        out = []
+        cli_module._interactive_graph_review(echo=out.append, prompt=_boom)
+        self.assertIn("No graph facts are pending review.", "\n".join(out))
+
+    def test_cli_update_graph_review_end_to_end(self):
+        import pocket.cli as cli_module
+        from click.testing import CliRunner
+
+        old_source = os.environ.get("POCKET_SOURCE_DIR")
+        os.environ["POCKET_SOURCE_DIR"] = str(self.source_dir)
+        self.addCleanup(
+            lambda: os.environ.__setitem__("POCKET_SOURCE_DIR", old_source)
+            if old_source is not None
+            else os.environ.pop("POCKET_SOURCE_DIR", None)
+        )
+        self._set_min_conf("0.9")
+        importlib.reload(cli_module)
+        from pocket import admin, retrieval
+
+        runner = CliRunner()
+        res = runner.invoke(
+            cli_module.cli, ["update", "--graph", "--review"], input="a\n"
+        )
+        self.assertEqual(res.exit_code, 0, res.output)
+        self.assertIn("Approved", res.output)
+        self.assertEqual(admin.list_pending(db_path=self.db_path)["entities"], [])
+        self.assertTrue(retrieval.graph_neighborhood("Pocket", db_path=self.db_path))
+
+    def test_cli_update_review_without_graph_is_ignored(self):
+        import pocket.cli as cli_module
+        from click.testing import CliRunner
+
+        old_source = os.environ.get("POCKET_SOURCE_DIR")
+        os.environ["POCKET_SOURCE_DIR"] = str(self.source_dir)
+        self.addCleanup(
+            lambda: os.environ.__setitem__("POCKET_SOURCE_DIR", old_source)
+            if old_source is not None
+            else os.environ.pop("POCKET_SOURCE_DIR", None)
+        )
+        importlib.reload(cli_module)
+
+        runner = CliRunner()
+        res = runner.invoke(cli_module.cli, ["update", "--review"])
+        self.assertEqual(res.exit_code, 0, res.output)
+        self.assertIn("no effect without --graph", res.output)
 if __name__ == "__main__":
     unittest.main()

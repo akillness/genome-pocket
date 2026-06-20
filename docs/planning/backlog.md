@@ -50,13 +50,15 @@ This backlog contains user stories and tasks categorized by priority. It serves 
 
 ### Low Priority (Sprint 5+ Target)
 
-- [ ] **POCKET-301: Local Tracing & Lineage UI**
+- [ ] **POCKET-301: Local Tracing & Lineage UI** *(interactive graph-review slice done)*
   - *User Story:* As a user, I want a simple web UI to visualize how a query was routed and which source files contributed to the answer.
   - *Tasks:* Build a lightweight Streamlit or FastAPI/React UI.
+  - *Delivered (interactive-review slice, from POCKET-302):* `pocket update --graph --review` now runs a human-in-the-loop pass after indexing — `cli._interactive_graph_review()` lists every fact the confidence gate staged as `pending` and offers a bulk *approve-all / reject-all / each / skip* choice (with a per-fact *approve / reject / leave-pending / quit* loop in *each* mode), reusing the `admin.list_pending/approve_pending/reject_pending` API so it stays consistent with the post-hoc `pocket graph review`. The flag is opt-in and a no-op (reported, not silent) without `--graph` or in live mode. Tests: approve-all, each-mode routing, quit mid-loop, skip, no-prompt-when-empty, CLI end-to-end, and the without-`--graph` guard (7).
+  - *Remaining:* the web-UI surface (query-routing trace + lineage visualization).
 - [x] **POCKET-302: Human-in-the-Loop Approval Gate** *(graph slice done — see `docs/architecture/graph-target.md` §7)*
   - *User Story:* As a user, I want to approve or reject changes to my knowledge graph before they are committed so that I maintain high data quality.
   - *Delivered (graph slice):* the confidence gate now *stages* rather than drops. `EntityNode`/`RelationEdge` carry a `status` (`approved`|`pending`); the pipeline writes any fact below `POCKET_GRAPH_MIN_CONFIDENCE` (or with a staged endpoint) as `pending`. All graph reads filter to approved-only (`retrieval._status_clause()`, legacy-graph safe), so pending facts stay out of search/neighborhood/concepts until accepted. `pocket graph review` lists and approves/rejects them (`--approve`/`--reject <id>`, `--approve-all`/`--reject-all`), backed by `admin.list_pending/approve_pending/reject_pending`; `pocket graph <entity>` still routes to the neighborhood view. Tests: threshold staging, retrieval hiding, approve/reject round-trips, specific-id approval, CLI review + back-compat routing (7).
-  - *Remaining:* an interactive prompt during `pocket update --graph` (vs. the current post-hoc `review` flow) and the web-UI surface fold into POCKET-301.
+  - *Remaining:* none for the graph slice. The interactive `pocket update --graph --review` prompt is now delivered under POCKET-301; the web-UI surface stays in POCKET-301.
 - [ ] **POCKET-303: Automated Retrieval Evaluation**
   - *User Story:* As a developer, I want to run automated evaluations on my retrieval pipeline so that I can prevent regression when changing chunk sizes or models.
   - *Tasks:* Set up a local evaluation script using synthetic query-context pairs.

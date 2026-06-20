@@ -12,6 +12,18 @@ by installing it in an isolated venv and diffing its public API against the
 vendored `pocketindex` engine.
 
 ### Added
+- **Interactive review during `pocket update --graph` (POCKET-301 slice).**
+  A new `--review` flag turns the graph build into a human-in-the-loop pass: after
+  indexing, `_interactive_graph_review()` (in `pocket/cli.py`) walks the operator
+  through every fact the confidence gate staged as `pending`, offering a bulk
+  *approve-all / reject-all / each / skip* choice and, in *each* mode, a per-fact
+  *approve / reject / leave-pending / quit* prompt. It reuses the same
+  `pocket.admin` review API as `pocket graph review`, so the inline and post-hoc
+  flows stay consistent; anything left unresolved stays pending for later. The flag
+  is opt-in and a no-op without `--graph` or in live mode (both reported, not
+  silent). Tests: approve-all commit, each-mode per-fact routing, quit mid-loop,
+  skip leaves all pending, no-prompt when nothing is staged, plus CLI end-to-end
+  `update --graph --review` and `--review`-without-`--graph` guard (7).
 - **Human-in-the-loop graph approval gate (POCKET-302).** Low-confidence graph
   facts are no longer dropped — they are *staged*. `EntityNode`/`RelationEdge` gain
   a `status` column (`"approved"` | `"pending"`); the pipeline writes any node/edge

@@ -13,6 +13,7 @@ vendored `pocketindex` engine.
 
 ### Added
 - **Automated retrieval evaluation & regression guard (POCKET-303).** New
+
   `pocket/evaluation.py` plus a `pocket eval` command turn retrieval quality into
   a measurable, CI-gateable number so changing chunk sizes, the embedding model,
   or fusion weights can't silently regress recall. It computes standard IR metrics
@@ -31,8 +32,8 @@ vendored `pocketindex` engine.
   errors, baseline round-trip + tolerance-aware regression detection, and the CLI
   end-to-end (synthesize → save → pass → doctored-baseline fail) (6).
 - **Local query-tracing & lineage web UI (POCKET-301 slice).** `pocket serve` now
-
   serves a single, dependency-free HTML page at `GET /` (`pocket/web_ui.py`) that
+
   visualizes *how a query was routed* and *which source files answered it*. A new
   `retrieval.routing_trace()` is the testable core: it reuses the same
   `_gather`/`_fuse` orchestration as `search()` (refactored into a shared `_gather`
@@ -115,6 +116,20 @@ vendored `pocketindex` engine.
   chunks under an unchanged prompt are never re-sent to the model across runs; bumping
   `PROMPT_VERSION` invalidates the cache. The deterministic backend stays unwrapped, so
   default runs gain no new table. Tests: `TestExtractionPromptAndMemo` (5).
+- **Multimodal image embedding via SigLIP2 (opt-in).** A new transformers-native
+  `SiglipEmbedder` (`pocketindex/ops/siglip_embedder.py`) maps text *and* images
+  into SigLIP2's shared, L2-normalized space, so a text query matches stored image
+  embeddings through the existing sqlite-vec single-vector + RRF path — no
+  reranker or multi-vector machinery required. Enabled by setting
+  `EMBEDDING_MODEL=google/siglip2-base-patch16-224` (any `siglip2` id); the default
+  text-only path is unchanged. The `localfs` connector now lists image files
+  (`.png/.jpg/.jpeg/.webp/.gif/.bmp/.tiff`); the pipeline routes them to a
+  single-row, no-split image embedding pass *only* when the active embedder
+  advertises `supports_image`, and the memo fingerprint hashes image bytes so an
+  edited image re-embeds. Graph extraction stays text-only. Heavy deps
+  (`transformers`/`torch`/`Pillow`) install via the new `multimodal` extra and are
+  imported lazily, keeping the base install text-only. SigLIP2 is Apache-2.0.
+
 - **Run statistics / monitoring (POCKET-401).** New `pocketindex/stats.py`
   (`UpdateStats` / `ComponentStats`) tracks adds / reprocesses / unchanged /
   deletes / errors per component. Stats are threaded through `mount_each` and
@@ -147,7 +162,20 @@ vendored `pocketindex` engine.
   (POCKET-404a).** `pocket update --graph` (or `POCKET_GRAPH=1`) now extracts a
   SQLite-resident knowledge graph alongside the vector/lexical index. New
   `pocketindex/ops/extract.py` turns chunks into `(entities, relations)` behind one
-  `ExtractionModel` protocol with three **local** backends — `DeterministicExtractor`
+### Added
+- **Multimodal image embedding via SigLIP2 (opt-in).** A new transformers-native
+  `SiglipEmbedder` (`pocketindex/ops/siglip_embedder.py`) maps text *and* images
+  into SigLIP2's shared, L2-normalized space, so a text query matches stored image
+  embeddings through the existing sqlite-vec single-vector + RRF path — no
+  reranker or multi-vector machinery required. Enabled by setting
+  `EMBEDDING_MODEL=google/siglip2-base-patch16-224` (any `siglip2` id); the default
+  text-only path is unchanged. The `localfs` connector now lists image files
+  (`.png/.jpg/.jpeg/.webp/.gif/.bmp/.tiff`); the pipeline routes them to a
+  single-row, no-split image embedding pass *only* when the active embedder
+  advertises `supports_image`, and the memo fingerprint hashes image bytes so an
+  edited image re-embeds. Graph extraction stays text-only. Heavy deps
+  (`transformers`/`torch`/`Pillow`) install via the new `multimodal` extra and are
+  imported lazily, keeping the base install text-only. SigLIP2 is Apache-2.0.
   (default; no LLM, no network, no heavy deps, so the whole graph path is
   offline-testable), `OllamaExtractor` (local daemon), and **`AirLLMExtractor`**
   (in-process airLLM; an optional `genome-pocket[airllm]` extra that layer-shards a
@@ -163,6 +191,20 @@ vendored `pocketindex` engine.
   byte-for-byte unchanged — zero new cost or dependency for existing users.
 
 ### Changed
+- **Default embedding model → `Qwen/Qwen3-Embedding-0.6B` (POCKET-405).** Replaces
+  `all-MiniLM-L6-v2` (384-d) with the Apache-2.0 Qwen3-Embedding-0.6B (1024-d),
+  a 2026 open-weight MTEB-leading retriever. Both the indexing path
+  (`SentenceTransformerEmbedder`) and the query path (`pocket.retrieval`) now apply
+  the model's asymmetric prompt registry — documents use the empty `document`
+  prompt, queries are wrapped in the `query` instruction — while symmetric models
+  with no prompts (e.g. MiniLM) keep encoding plainly, so the swap is fully
+  backward compatible. Override with `EMBEDDING_MODEL=...` as before.
+- **Embedding-model-aware memoization.** The source fingerprint
+  (`_compute_memo_hash`) now folds in the active embedding signature
+  (`POCKET_EMBED_SIG`, set from `EMBEDDING_MODEL`). Switching models invalidates
+  every memo so unchanged sources are re-embedded at the new vector dimension on
+  the next `pocket update`, instead of leaving stale mixed-dimension vectors that
+  would break `vec_distance_cosine`.
 - **Indentation-preserving refine path.** `TextRefiner.refine(text, code=True)`
   preserves inline whitespace and indentation for code files (prose still
   collapses runs of whitespace), so block structure such as Python indentation

@@ -24,6 +24,14 @@ airllm = [
     "torch",
     "transformers",
 ]
+# Optional multimodal (image + text) embedding via SigLIP2. Selected at runtime
+# with EMBEDDING_MODEL=google/siglip2-*; the SiglipEmbedder imports these lazily
+# so the base text-only install stays unchanged.
+multimodal = [
+    "transformers",
+    "torch",
+    "Pillow",
+]
 
 
 [project.scripts]

@@ -85,7 +85,7 @@
     <g transform="translate(16, 134)">
       <rect width="144" height="58" rx="8" fill="#FFFFFF" />
       <text x="72" y="23" text-anchor="middle" font-size="11" font-weight="bold" fill="#1E3A8A">SentenceTransformer</text>
-      <text x="72" y="40" text-anchor="middle" font-size="9" fill="#3B82F6">all-MiniLM-L6-v2</text>
+      <text x="72" y="40" text-anchor="middle" font-size="9" fill="#3B82F6">Qwen3-Embedding-0.6B (+ SigLIP2 opt-in)</text>
     </g>
     <g transform="translate(16, 204)">
       <rect width="144" height="58" rx="8" fill="#FFFFFF" />

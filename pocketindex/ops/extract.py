@@ -27,6 +27,7 @@ Design stance (see the spec):
 from __future__ import annotations
 
 import hashlib
+import itertools
 import json
 import os
 import re
@@ -119,25 +120,16 @@ class DeterministicExtractor:
         self.confidence = confidence
 
     def _candidate_entities(self, sentence: str) -> List[ExtractedEntity]:
+        # _CODE_IDENT alternates two groups; _CAPITAL_PHRASE has one — the first
+        # truthy group is the name either way, so one table drives both passes.
         found: dict[str, ExtractedEntity] = {}
-        for match in _CAPITAL_PHRASE.finditer(sentence):
-            phrase = _normalize_name(match.group(1))
-            if _is_meaningful(phrase) and phrase.lower() not in found:
-                found[phrase.lower()] = ExtractedEntity(
-                    name=phrase,
-                    type="Concept",
-                    confidence=self.confidence,
-                    evidence=sentence.strip(),
-                )
-        for match in _CODE_IDENT.finditer(sentence):
-            ident = _normalize_name(match.group(1) or match.group(2) or "")
-            if ident and _is_meaningful(ident) and ident.lower() not in found:
-                found[ident.lower()] = ExtractedEntity(
-                    name=ident,
-                    type="Symbol",
-                    confidence=self.confidence,
-                    evidence=sentence.strip(),
-                )
+        for regex, etype in ((_CAPITAL_PHRASE, "Concept"), (_CODE_IDENT, "Symbol")):
+            for match in regex.finditer(sentence):
+                name = _normalize_name(next((g for g in match.groups() if g), ""))
+                if _is_meaningful(name) and name.lower() not in found:
+                    found[name.lower()] = ExtractedEntity(
+                        name, etype, self.confidence, sentence.strip()
+                    )
         return list(found.values())
 
     def extract(self, text: str) -> Extraction:
@@ -150,19 +142,13 @@ class DeterministicExtractor:
             sent_entities = self._candidate_entities(sentence)
             for ent in sent_entities:
                 entities.setdefault(ent.name.lower(), ent)
-            # Co-occurrence edges between distinct entities in this sentence.
-            for i in range(len(sent_entities)):
-                for j in range(i + 1, len(sent_entities)):
-                    a, b = sent_entities[i], sent_entities[j]
-                    relations.append(
-                        ExtractedRelation(
-                            subject=a.name,
-                            predicate="mentioned_with",
-                            object=b.name,
-                            confidence=self.confidence,
-                            evidence=sentence,
-                        )
+            # Co-occurrence edges between every distinct entity pair in this sentence.
+            for a, b in itertools.combinations(sent_entities, 2):
+                relations.append(
+                    ExtractedRelation(
+                        a.name, "mentioned_with", b.name, self.confidence, sentence
                     )
+                )
         return Extraction(entities=list(entities.values()), relations=relations)
 
 

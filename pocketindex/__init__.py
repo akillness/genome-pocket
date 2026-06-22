@@ -3,8 +3,15 @@ import asyncio
 import contextvars
 import hashlib
 import inspect
+import os
 import time
 from typing import Any, Callable, Dict, Generic, List, TypeVar, AsyncIterator
+
+try:
+    from cocoindex.connectorkits.fingerprint import fingerprint_bytes as _fp_bytes
+    _HAVE_COCOINDEX_FP = True
+except ImportError:  # cocoindex not installed; fall back to hashlib
+    _HAVE_COCOINDEX_FP = False
 
 from pocketindex.stats import ComponentStats, UpdateStats
 
@@ -79,24 +86,34 @@ def fn(func_or_memo=None, **kwargs):
         return func_or_memo
 
 async def map(func: Callable, items: Any, *args) -> List[Any]:
-    # Run the function on each item in the items list/iterable
-    results = []
-    for item in items:
+    """Run func concurrently on each item (mirrors cocoindex.map semantics).
+
+    Uses asyncio.gather so all items are in-flight simultaneously within the
+    current component — unlike the old sequential for-loop.
+    """
+    async def _call(item):
         if inspect.iscoroutinefunction(func):
-            res = await func(item, *args)
-        else:
-            res = func(item, *args)
-        results.append(res)
-    return results
+            return await func(item, *args)
+        return func(item, *args)
+
+    return list(await asyncio.gather(*(_call(item) for item in items)))
 
 async def _compute_memo_hash(value: Any) -> str:
-    """Derive a stable content fingerprint for a source item.
+    """Stable content fingerprint for a source item.
 
-    For file-like inputs we hash the actual text content so that any edit
-    changes the fingerprint. For everything else we fall back to repr().
+    Uses cocoindex.connectorkits.fingerprint.fingerprint_bytes when available
+    (same algorithm as the real cocoindex engine) and falls back to SHA-256.
+    File-like inputs are hashed by content so any edit changes the fingerprint.
+    The active embedding signature (``POCKET_EMBED_SIG``) is folded in so that
+    switching the embedding model invalidates every memo and forces a clean
+    re-embed at the new vector dimension instead of leaving stale vectors.
     """
     try:
-        if hasattr(value, "read_text"):
+        if getattr(value, "is_image", False) and hasattr(value, "read_bytes"):
+            # Binary image source: fingerprint raw bytes (read_text would fail on
+            # non-UTF-8 content) so an edited image re-embeds.
+            payload = value.read_bytes()
+        elif hasattr(value, "read_text"):
             text = value.read_text()
             if inspect.isawaitable(text):
                 text = await text
@@ -104,8 +121,12 @@ async def _compute_memo_hash(value: Any) -> str:
         else:
             payload = repr(value).encode("utf-8")
     except Exception:
-        # If we cannot read the content, treat it as always-changed.
         return ""
+    embed_sig = os.getenv("POCKET_EMBED_SIG", "")
+    if embed_sig:
+        payload = embed_sig.encode("utf-8") + b"\x00" + payload
+    if _HAVE_COCOINDEX_FP:
+        return _fp_bytes(payload).hex()
     return hashlib.sha256(payload).hexdigest()
 
 

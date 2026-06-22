@@ -1,7 +1,7 @@
 """Local filesystem connector for PocketIndex."""
 import pathlib
 from typing import Dict, Optional, Set
-from pocketindex.resources.file import FileLike
+from pocketindex.resources.file import FileLike, is_image_path
 from pocketindex.ops.text import detect_code_language
 
 # Plain-text/document extensions that are always indexable.
@@ -11,6 +11,11 @@ _TEXT_EXTENSIONS: Set[str] = {".md", ".markdown", ".txt", ".rst"}
 def _is_indexable(path: pathlib.Path) -> bool:
     suffix = path.suffix.lower()
     if suffix in _TEXT_EXTENSIONS:
+        return True
+    # Image files are ingested by the opt-in multimodal embedding path. They are
+    # always listed here; the pipeline only routes them when the active embedder
+    # advertises image support (otherwise they are simply skipped).
+    if is_image_path(path):
         return True
     # Recognized source-code files (python, rust, js/ts, go, ...) are indexable
     # too so the code-aware refine + splitting path has something to chew on.

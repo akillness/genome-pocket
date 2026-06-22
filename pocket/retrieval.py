@@ -15,6 +15,7 @@ Every returned hit carries full lineage (source file + character offsets) so an
 agent can cite the exact source bytes, matching pocketindex's end-to-end lineage
 guarantee.
 """
+import json
 import sqlite3
 from dataclasses import dataclass, asdict
 from functools import lru_cache
@@ -22,7 +23,6 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 import sqlite_vec
-from sentence_transformers import SentenceTransformer
 
 import pocket.config as config
 
@@ -44,15 +44,42 @@ class RetrievalHit:
     score: float
     vector_rank: Optional[int] = None
     lexical_rank: Optional[int] = None
+    graph_rank: Optional[int] = None
 
     def to_dict(self) -> Dict:
         return asdict(self)
 
 
 @lru_cache(maxsize=4)
-def _get_model(model_name: str) -> SentenceTransformer:
-    """Cache the embedding model so repeated queries don't reload weights."""
-    return SentenceTransformer(model_name)
+def _get_model(model_name: str):
+    """Cache the embedding model so repeated queries don't reload weights.
+
+    Delegates model-type selection to the shared embedder registry
+    (:func:`pocketindex.ops.sentence_transformers.resolve_backend`) so the query
+    side can never drift from the ingestion side. Returns a multimodal
+    :class:`SiglipEmbedder` for siglip2 ids (so a text query is encoded into the
+    shared image/text space), or a plain SentenceTransformer for text models.
+    """
+    from pocketindex.ops.sentence_transformers import resolve_backend
+
+    return resolve_backend(model_name).query_model(model_name)
+
+
+def _encode_query(model, text: str):
+    """Encode query-side text into the index's vector space.
+
+    - Multimodal SigLIP2 (``encode_query``): text -> shared image/text space so the
+      query can match stored image embeddings.
+    - Instruction-aware text models (e.g. Qwen3-Embedding) define a ``query`` prompt
+      that must wrap the query for the asymmetric retrieval recipe.
+    - Symmetric models such as all-MiniLM expose no prompts and are encoded plainly.
+    """
+    if hasattr(model, "encode_query"):
+        return model.encode_query(text)
+    kwargs = {"normalize_embeddings": True}
+    if "query" in (getattr(model, "prompts", None) or {}):
+        kwargs["prompt_name"] = "query"
+    return model.encode(text, **kwargs)
 
 
 def _connect(db_path: Path) -> sqlite3.Connection:
@@ -118,6 +145,52 @@ def _lexical_search(conn: sqlite3.Connection, query: str, limit: int) -> List[tu
     except sqlite3.OperationalError:
         return []
 
+# Which strategies each retrieval mode activates. Single source of truth for the
+# router so the CLI, REST API, and tracing UI agree on what "hybrid" means.
+_MODE_STRATEGIES = {
+    "hybrid": ("vector", "lexical", "graph"),
+    "vector": ("vector",),
+    "lexical": ("lexical",),
+    "graph": ("graph",),
+}
+
+
+def _gather(
+    conn: sqlite3.Connection,
+    query: str,
+    mode: str,
+    fetch_n: int,
+    model_name: str,
+) -> tuple:
+    """Run each enabled retrieval strategy and return their raw ranked rows.
+
+    Shared by :func:`search` and :func:`routing_trace` so the routing decision —
+    which strategies run, given the requested ``mode`` and which target tables
+    exist — lives in exactly one place and can never drift between a real search
+    and the trace the UI renders for the same query.
+    """
+    vector_rows: List[tuple] = []
+    lexical_rows: List[tuple] = []
+    graph_rows: List[tuple] = []
+
+    # Both vector search and graph entity-anchoring need the query embedding.
+    query_vector = None
+    if mode in ("hybrid", "vector", "graph"):
+        model = _get_model(model_name)
+        query_embedding = _encode_query(model, query)
+        query_vector = sqlite_vec.serialize_float32(query_embedding)
+
+
+    if mode in ("hybrid", "vector"):
+        vector_rows = _vector_search(conn, query_vector, fetch_n)
+
+    if mode in ("hybrid", "lexical") and _fts_available(conn):
+        lexical_rows = _lexical_search(conn, query, fetch_n)
+
+    if mode in ("hybrid", "graph") and _graph_available(conn):
+        graph_rows = _graph_search(conn, query_vector, fetch_n)
+
+    return vector_rows, lexical_rows, graph_rows
 
 def search(
     query: str,
@@ -128,8 +201,11 @@ def search(
 ) -> List[RetrievalHit]:
     """Run retrieval and return ranked, lineage-tagged hits.
 
-    ``mode`` is one of ``"hybrid"`` (vector + lexical via RRF), ``"vector"``
-    (semantic only), or ``"lexical"`` (keyword/BM25 only).
+    ``mode`` is one of ``"hybrid"`` (vector + lexical + graph via RRF),
+    ``"vector"`` (semantic only), ``"lexical"`` (keyword/BM25 only), or
+    ``"graph"`` (GraphRAG: entity-anchored multi-hop traversal). The graph
+    strategy only participates when an ``entities`` table is present, so
+    ``"hybrid"`` stays backward compatible on graph-less databases.
     """
     db_path = db_path or config.POCKET_SQLITE_DB
     model_name = model_name or config.EMBEDDING_MODEL
@@ -141,32 +217,27 @@ def search(
 
     conn = _connect(Path(db_path))
     try:
-        vector_rows: List[tuple] = []
-        lexical_rows: List[tuple] = []
+        vector_rows, lexical_rows, graph_rows = _gather(
+            conn, query, mode, fetch_n, model_name
+        )
 
-        if mode in ("hybrid", "vector"):
-            model = _get_model(model_name)
-            query_embedding = model.encode(query, normalize_embeddings=True)
-            query_vector = sqlite_vec.serialize_float32(query_embedding)
-            vector_rows = _vector_search(conn, query_vector, fetch_n)
-
-        if mode in ("hybrid", "lexical") and _fts_available(conn):
-            lexical_rows = _lexical_search(conn, query, fetch_n)
     finally:
         conn.close()
 
-    return _fuse(vector_rows, lexical_rows, limit)
+    return _fuse(vector_rows, lexical_rows, limit, graph_rows)
 
 
 def _fuse(
     vector_rows: List[tuple],
     lexical_rows: List[tuple],
     limit: int,
+    graph_rows: Optional[List[tuple]] = None,
 ) -> List[RetrievalHit]:
-    """Combine vector and lexical results with Reciprocal Rank Fusion.
+    """Combine vector, lexical, and graph results with Reciprocal Rank Fusion.
 
-    Rows are keyed by chunk id so the same chunk found by both strategies has
-    its reciprocal-rank contributions summed.
+    Rows are keyed by chunk id so the same chunk found by several strategies has
+    its reciprocal-rank contributions summed. ``graph_rows`` is the optional
+    third (GraphRAG) list; passing it preserves the original two-list signature.
     """
     accum: Dict[int, RetrievalHit] = {}
 
@@ -188,9 +259,106 @@ def _fuse(
         hit.lexical_rank = rank
         hit.score += 1.0 / (RRF_K + rank)
 
+    for rank, row in enumerate(graph_rows or [], start=1):
+        chunk_id, file_path, text, start, end, _g = row
+        hit = accum.get(chunk_id)
+        if hit is None:
+            hit = RetrievalHit(file_path, text, start, end, score=0.0)
+            accum[chunk_id] = hit
+        hit.graph_rank = rank
+        hit.score += 1.0 / (RRF_K + rank)
+
     ranked = sorted(accum.values(), key=lambda h: h.score, reverse=True)
     return ranked[:limit]
 
+
+def routing_trace(
+    query: str,
+    limit: int = 5,
+    db_path: Optional[Path] = None,
+    model_name: Optional[str] = None,
+    mode: str = "hybrid",
+) -> Dict:
+    """Explain how a query is routed and which sources answer it (POCKET-301).
+
+    Returns a JSON-able trace the local tracing UI visualizes:
+
+      * ``strategies`` — for ``vector``/``lexical``/``graph``: whether the
+        chosen ``mode`` *activates* it, whether it is *available* on this target
+        (FTS / graph tables present), and how many candidates it produced.
+      * ``results`` — the fused hits, each annotated with the ``contributors``
+        (the strategies whose ranked list surfaced that chunk).
+
+    It reuses :func:`_gather` and :func:`_fuse`, so the trace can never diverge
+    from a real :func:`search` for the same query/mode.
+    """
+    db_path = db_path or config.POCKET_SQLITE_DB
+    model_name = model_name or config.EMBEDDING_MODEL
+    active = set(_MODE_STRATEGIES.get(mode, ()))
+
+    def _strategies(available: Dict[str, bool], candidates: Dict[str, int]):
+        return [
+            {
+                "name": name,
+                "active": name in active,
+                "available": available[name],
+                "candidates": candidates[name],
+            }
+            for name in ("vector", "lexical", "graph")
+        ]
+
+    zero = {"vector": 0, "lexical": 0, "graph": 0}
+    if not Path(db_path).exists():
+        absent = {"vector": False, "lexical": False, "graph": False}
+        return {
+            "query": query,
+            "mode": mode,
+            "limit": limit,
+            "strategies": _strategies(absent, zero),
+            "results": [],
+        }
+
+    fetch_n = max(limit * 4, limit)
+    conn = _connect(Path(db_path))
+    try:
+        available = {
+            "vector": True,
+            "lexical": _fts_available(conn),
+            "graph": _graph_available(conn),
+        }
+        vector_rows, lexical_rows, graph_rows = _gather(
+            conn, query, mode, fetch_n, model_name
+        )
+    finally:
+        conn.close()
+
+    candidates = {
+        "vector": len(vector_rows),
+        "lexical": len(lexical_rows),
+        "graph": len(graph_rows),
+    }
+    hits = _fuse(vector_rows, lexical_rows, limit, graph_rows)
+
+    results = []
+    for hit in hits:
+        row = hit.to_dict()
+        contributors = []
+        if hit.vector_rank is not None:
+            contributors.append("vector")
+        if hit.lexical_rank is not None:
+            contributors.append("lexical")
+        if hit.graph_rank is not None:
+            contributors.append("graph")
+        row["contributors"] = contributors
+        results.append(row)
+
+    return {
+        "query": query,
+        "mode": mode,
+        "limit": limit,
+        "strategies": _strategies(available, candidates),
+        "results": results,
+    }
 
 def format_hits(hits: List[RetrievalHit]) -> str:
     """Render hits as the human/agent-readable text used by CLI and MCP."""
@@ -315,6 +483,119 @@ def _graph_available(conn: sqlite3.Connection) -> bool:
     )
 
 
+def _has_status_column(conn: sqlite3.Connection, table: str) -> bool:
+    """Whether `table` carries the POCKET-302 HITL `status` column."""
+    try:
+        cols = [r[1] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()]
+    except sqlite3.Error:
+        return False
+    return "status" in cols
+
+
+def _status_clause(conn: sqlite3.Connection, table: str, alias: str = "") -> str:
+    """SQL predicate restricting graph reads to approved (committed) facts.
+
+    Pending facts staged by the HITL gate (POCKET-302) stay out of retrieval
+    until ``pocket graph review`` accepts them. Legacy graphs built before the
+    status column existed get an always-true predicate so reads still work.
+    """
+    col = f"{alias}.status" if alias else "status"
+    return f"{col} = 'approved'" if _has_status_column(conn, table) else "1=1"
+
+
+def _load_chunk_ids(raw: Optional[str]) -> List[int]:
+    """Parse an entity's ``source_chunk_ids`` JSON column into a list of ints."""
+    if not raw:
+        return []
+    try:
+        ids = json.loads(raw)
+    except (ValueError, TypeError):
+        return []
+    out: List[int] = []
+    for cid in ids if isinstance(ids, list) else []:
+        try:
+            out.append(int(cid))
+        except (ValueError, TypeError):
+            continue
+    return out
+
+
+def _graph_search(
+    conn: sqlite3.Connection,
+    query_vector,
+    limit: int,
+) -> List[tuple]:
+    """GraphRAG retriever: anchor the query to entities, traverse one hop, and
+    surface the chunks that produced the touched nodes and edges (POCKET-404d).
+
+    Returns rows shaped like the vector/lexical retrievers
+    ``(chunk_id, file_path, text, start, end, _score)`` in graph-relevance order
+    so :func:`_fuse` can blend them as a third ranked list. Every row resolves
+    back to a real ``embeddings`` chunk, so the citation/lineage guarantee holds.
+    Returns ``[]`` when there is no graph or no anchorable seed.
+    """
+    if not _graph_available(conn):
+        return []
+
+    # 1. Entity anchoring: nearest seed nodes by name embedding.
+    seed_n = max(3, limit)
+    seeds = conn.execute(
+        "SELECT id, source_chunk_ids, vec_distance_cosine(embedding, ?) AS d "
+        f"FROM entities WHERE {_status_clause(conn, 'entities')} "
+        "ORDER BY d ASC LIMIT ?",
+        (query_vector, seed_n),
+    ).fetchall()
+    if not seeds:
+        return []
+
+    ordered_ids: List[int] = []
+    seen: set = set()
+
+    def _push(cid: Optional[int]) -> None:
+        if cid is not None and cid not in seen:
+            seen.add(cid)
+            ordered_ids.append(cid)
+
+    for node_id, chunk_ids_json, _d in seeds:
+        # 2. The seed's own mention chunks rank first.
+        for cid in _load_chunk_ids(chunk_ids_json):
+            _push(cid)
+        # 3. One-hop traversal: the edge's source chunk plus the neighbor's
+        #    mention chunks, ordered by edge confidence.
+        edges = conn.execute(
+            f"""
+            SELECT r.source_chunk_id, r.subject_id, r.object_id,
+                   sj.source_chunk_ids AS subj_chunks,
+                   ob.source_chunk_ids AS obj_chunks
+            FROM relations r
+            LEFT JOIN entities sj ON sj.id = r.subject_id
+            LEFT JOIN entities ob ON ob.id = r.object_id
+            WHERE (r.subject_id = ? OR r.object_id = ?)
+              AND {_status_clause(conn, 'relations', 'r')}
+            ORDER BY r.confidence DESC
+            """,
+            (node_id, node_id),
+        ).fetchall()
+        for edge_chunk, subj_id, _obj_id, subj_chunks, obj_chunks in edges:
+            _push(edge_chunk)
+            neighbor_chunks = obj_chunks if subj_id == node_id else subj_chunks
+            for cid in _load_chunk_ids(neighbor_chunks):
+                _push(cid)
+
+    ordered_ids = ordered_ids[:limit]
+    if not ordered_ids:
+        return []
+
+    placeholders = ",".join("?" * len(ordered_ids))
+    rows = conn.execute(
+        f"SELECT id, file_path, text, start_offset, end_offset "
+        f"FROM embeddings WHERE id IN ({placeholders})",
+        ordered_ids,
+    ).fetchall()
+    by_id = {r[0]: r for r in rows}
+    # Preserve graph-relevance order; some chunk ids may no longer exist.
+    return [(*by_id[cid], 0.0) for cid in ordered_ids if cid in by_id]
+
 def graph_neighborhood(
     entity: str,
     limit: int = 10,
@@ -339,33 +620,36 @@ def graph_neighborhood(
         # 1. Exact / alias match.
         row = conn.execute(
             "SELECT id, name, type, aliases, confidence, source_file "
-            "FROM entities WHERE lower(name) = lower(?) LIMIT 1",
+            f"FROM entities WHERE lower(name) = lower(?) "
+            f"AND {_status_clause(conn, 'entities')} LIMIT 1",
             (entity,),
         ).fetchone()
         # 2. Fall back to nearest by name embedding.
         if row is None:
             model = _get_model(model_name)
             qv = sqlite_vec.serialize_float32(
-                model.encode(entity, normalize_embeddings=True)
+                _encode_query(model, entity)
             )
             row = conn.execute(
                 "SELECT id, name, type, aliases, confidence, source_file, "
                 "vec_distance_cosine(embedding, ?) AS d "
-                "FROM entities ORDER BY d ASC LIMIT 1",
+                f"FROM entities WHERE {_status_clause(conn, 'entities')} "
+                "ORDER BY d ASC LIMIT 1",
                 (qv,),
             ).fetchone()
         if row is None:
             return {}
         node_id, name, etype, aliases, confidence, source_file = row[:6]
         edges = conn.execute(
-            """
+            f"""
             SELECT r.predicate, r.object_id, r.subject_id, r.evidence,
                    r.confidence, r.source_file,
                    so.name AS subject_name, ob.name AS object_name
             FROM relations r
             LEFT JOIN entities so ON so.id = r.subject_id
             LEFT JOIN entities ob ON ob.id = r.object_id
-            WHERE r.subject_id = ? OR r.object_id = ?
+            WHERE (r.subject_id = ? OR r.object_id = ?)
+              AND {_status_clause(conn, 'relations', 'r')}
             ORDER BY r.confidence DESC
             LIMIT ?
             """,
@@ -437,3 +721,86 @@ def format_neighborhood(node: Dict) -> str:
                 f"[{n.get('confidence', 0):.2f}]"
             )
     return "\n".join(lines)
+
+
+def list_graph_concepts(
+    concept: str | None = None,
+    limit: int = 20,
+    db_path: Optional[Path] = None,
+) -> List[Dict]:
+    """Return top entities (and their top relation) from the knowledge graph.
+
+    Requires a graph built with ``pocket update --graph`` (``POCKET_GRAPH=1``).
+    When *concept* is given, filters by case-insensitive prefix match on the
+    entity name; otherwise returns the highest-confidence entities up to *limit*.
+
+    Each dict has keys: name, type, confidence, source_file, top_relation.
+    Returns an empty list when the graph tables do not exist.
+    """
+    db_path = db_path or config.POCKET_SQLITE_DB
+    if not Path(db_path).exists():
+        return []
+    conn = sqlite3.connect(str(db_path))
+    try:
+        if not _graph_available(conn):
+            return []
+        if concept:
+            rows = conn.execute(
+                f"""
+                SELECT id, name, type, confidence, source_file
+                FROM entities
+                WHERE lower(name) LIKE lower(?)
+                  AND {_status_clause(conn, 'entities')}
+                ORDER BY confidence DESC
+                LIMIT ?
+                """,
+                (concept.lower() + "%", limit),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                f"""
+                SELECT id, name, type, confidence, source_file
+                FROM entities
+                WHERE {_status_clause(conn, 'entities')}
+                ORDER BY confidence DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+
+        results = []
+        for eid, name, etype, conf, src in rows:
+            # Fetch the single most-confident relation for context.
+            rel = conn.execute(
+                f"""
+                SELECT r.predicate, ob.name AS obj_name, so.name AS sub_name,
+                       r.subject_id
+                FROM relations r
+                LEFT JOIN entities ob ON ob.id = r.object_id
+                LEFT JOIN entities so ON so.id = r.subject_id
+                WHERE (r.subject_id = ? OR r.object_id = ?)
+                  AND {_status_clause(conn, 'relations', 'r')}
+                ORDER BY r.confidence DESC
+                LIMIT 1
+                """,
+                (eid, eid),
+            ).fetchone()
+            top_relation = None
+            if rel:
+                pred, obj_name, sub_name, subj_id = rel
+                if subj_id == eid:
+                    top_relation = f"{name} -{pred}-> {obj_name}"
+                else:
+                    top_relation = f"{sub_name} -{pred}-> {name}"
+            results.append(
+                {
+                    "name": name,
+                    "type": etype,
+                    "confidence": conf,
+                    "source_file": src,
+                    "top_relation": top_relation,
+                }
+            )
+        return results
+    finally:
+        conn.close()

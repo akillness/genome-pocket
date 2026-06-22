@@ -78,3 +78,36 @@ Where:
 - $M$ is the set of search strategies.
 - $r_m(d)$ is the rank of document $d$ in strategy $m$.
 - $k$ is a constant (typically 60).
+
+---
+
+## Automated Evaluation & Regression Guard (POCKET-303)
+
+Retrieval quality is measurable, not aspirational. `pocket/evaluation.py` (driven
+by `pocket eval`) scores the live pipeline so a change to chunk size, embedding
+model, or fusion weights that quietly hurts recall fails loudly instead.
+
+**Metrics.** Standard information-retrieval scores, computed as pure functions
+over a ranked list of retrieved file paths versus a set of relevant ones:
+Hit@k, Reciprocal Rank (→ MRR), Precision@k, Recall@k, and Average Precision
+(→ MAP). Path matching is lenient (exact, path-suffix, or basename) so a gold
+set written with relative paths still matches an index of absolute paths.
+
+**Cases.** Two sources:
+
+- **Synthetic query/context pairs** (`synthesize_cases`) mine the *existing
+  index*: for each source file, the tokens most *distinctive* to it (lowest
+  cross-file document frequency, then length) are joined into a self-labeled
+  query whose only correct answer is that file. No hand-curated gold set is
+  needed, and any indexing/chunking regression becomes a dropped hit. These
+  default to `lexical` mode — a deterministic probe of the BM25 index that does
+  not depend on which embedding model is installed.
+- **Hand-written gold cases** loaded from JSON (`--cases`), each
+  `{query, relevant_files[, mode]}`, validated on load.
+
+**Run & gate.** `evaluate()` runs every case through the same
+`retrieval.search()` real queries use (honoring each case's `mode`), so the
+harness can never diverge from production. `save_baseline()` records a run's
+aggregate metrics; `compare_to_baseline()` (with a `--tolerance` to absorb
+noise) flags any metric that fell below the baseline, and `pocket eval
+--baseline <json>` exits non-zero on a regression — ready to drop into CI.

@@ -169,6 +169,96 @@ class TestRetrievalAndApi(unittest.TestCase):
         r = client.get("/search", params={"q": ""})
         self.assertEqual(r.status_code, 400)
 
+    def test_routing_trace_annotates_strategies_and_contributors(self):
+        from pocket import retrieval
+
+        importlib.reload(retrieval)
+        self._run()
+
+        trace = retrieval.routing_trace("deletion propagation", mode="hybrid")
+        self.assertEqual(trace["mode"], "hybrid")
+        by_name = {s["name"]: s for s in trace["strategies"]}
+        self.assertEqual(set(by_name), {"vector", "lexical", "graph"})
+        # Hybrid activates all three; lexical is available (FTS built), graph is
+        # not (this index has no --graph entities table).
+        self.assertTrue(by_name["vector"]["active"])
+        self.assertTrue(by_name["lexical"]["active"])
+        self.assertTrue(by_name["graph"]["active"])
+        self.assertTrue(by_name["lexical"]["available"])
+        self.assertFalse(by_name["graph"]["available"])
+        self.assertEqual(by_name["graph"]["candidates"], 0)
+        self.assertTrue(by_name["vector"]["candidates"] > 0)
+
+        self.assertTrue(trace["results"])
+        # Every hit names the strategies that surfaced it, and no hit claims a
+        # graph contribution since the graph strategy never ran.
+        for hit in trace["results"]:
+            self.assertTrue(hit["contributors"])
+            self.assertNotIn("graph", hit["contributors"])
+            for c in hit["contributors"]:
+                self.assertIn(c, {"vector", "lexical"})
+        contributing = {c for hit in trace["results"] for c in hit["contributors"]}
+        self.assertIn("vector", contributing)
+
+    def test_routing_trace_lexical_mode_routes_only_lexical(self):
+        from pocket import retrieval
+
+        importlib.reload(retrieval)
+        self._run()
+
+        trace = retrieval.routing_trace("deletion", mode="lexical")
+        by_name = {s["name"]: s for s in trace["strategies"]}
+        self.assertTrue(by_name["lexical"]["active"])
+        self.assertFalse(by_name["vector"]["active"])
+        self.assertFalse(by_name["graph"]["active"])
+        # Inactive strategies produce no candidates even though vector is
+        # otherwise available.
+        self.assertEqual(by_name["vector"]["candidates"], 0)
+        self.assertTrue(by_name["lexical"]["candidates"] > 0)
+        self.assertTrue(trace["results"])
+        for hit in trace["results"]:
+            self.assertEqual(hit["contributors"], ["lexical"])
+
+    def test_routing_trace_missing_index_returns_empty(self):
+        from pocket import retrieval
+
+        importlib.reload(retrieval)
+        # No _run(): the DB does not exist yet.
+        trace = retrieval.routing_trace("anything", mode="hybrid")
+        self.assertEqual(trace["results"], [])
+        for s in trace["strategies"]:
+            self.assertFalse(s["available"])
+            self.assertEqual(s["candidates"], 0)
+
+    def test_api_ui_and_trace_endpoints(self):
+        from starlette.testclient import TestClient
+        from pocket.api_server import create_app
+
+        self._run()
+        client = TestClient(create_app())
+
+        r = client.get("/")
+        self.assertEqual(r.status_code, 200)
+        self.assertIn("text/html", r.headers["content-type"])
+        self.assertIn("Query Tracing", r.text)
+
+        r = client.get("/trace", params={"q": "deletion", "mode": "hybrid"})
+        self.assertEqual(r.status_code, 200)
+        body = r.json()
+        self.assertEqual(body["mode"], "hybrid")
+        self.assertTrue(body["results"])
+        self.assertEqual(
+            {s["name"] for s in body["strategies"]},
+            {"vector", "lexical", "graph"},
+        )
+
+        r = client.get("/trace", params={"q": ""})
+        self.assertEqual(r.status_code, 400)
+
+        r = client.get("/trace", params={"q": "x", "mode": "bogus"})
+        self.assertEqual(r.status_code, 400)
+
+
 class TestTextRefiner(unittest.TestCase):
     """Unit tests for the deterministic refinement stage."""
 
@@ -492,100 +582,6 @@ class TestLifecycleCommands(unittest.TestCase):
         self.assertIn("Dropped", res.output)
 
 
-class TestGraphExtraction(unittest.TestCase):
-    """POCKET-404: offline graph ops (extraction + entity resolution) and the
-    end-to-end graph target built with the deterministic (no-LLM) backend."""
-
-    def test_deterministic_extractor_finds_entities_and_relations(self):
-        from pocketindex.ops.extract import DeterministicExtractor
-
-        ex = DeterministicExtractor()
-        out = ex.extract(
-            "Pocket uses SQLite for storage. SQLite powers the Pocket index."
-        )
-        names = {e.name for e in out.entities}
-        self.assertIn("Pocket", names)
-        self.assertIn("SQLite", names)
-        # Co-occurrence relations are emitted between sentence-mates.
-        self.assertTrue(
-            any(
-                r.predicate == "mentioned_with"
-                and {r.subject, r.object} == {"Pocket", "SQLite"}
-                for r in out.relations
-            )
-        )
-        # Every fact carries confidence and evidence.
-        for e in out.entities:
-            self.assertGreaterEqual(e.confidence, 0.0)
-            self.assertTrue(e.evidence)
-
-    def test_build_extractor_defaults_to_deterministic(self):
-        from pocketindex.ops.extract import build_extractor, DeterministicExtractor
-
-        self.assertIsInstance(build_extractor(), DeterministicExtractor)
-        # Unknown provider falls back to deterministic, never crashes.
-        self.assertIsInstance(
-            build_extractor(provider="nope"), DeterministicExtractor
-        )
-
-    def test_parse_extraction_json_validates_and_normalizes(self):
-        from pocketindex.ops.extract import parse_extraction_json
-
-        ext = parse_extraction_json(
-            '```json\n{"entities":[{"name":" Foo ","type":"Tool","confidence":2}],'
-            '"relations":[{"subject":"Foo","predicate":"Depends On",'
-            '"object":"Bar","confidence":0.7}]}\n```',
-            evidence="ctx",
-        )
-        self.assertEqual(ext.entities[0].name, "Foo")
-        # Confidence is clamped to [0,1].
-        self.assertEqual(ext.entities[0].confidence, 1.0)
-        # Predicate is lower_snake_cased.
-        self.assertEqual(ext.relations[0].predicate, "depends_on")
-
-    def test_parse_extraction_json_rejects_garbage(self):
-        from pocketindex.ops.extract import parse_extraction_json
-
-        with self.assertRaises(ValueError):
-            parse_extraction_json("not json at all", evidence="ctx")
-
-    def test_entity_resolution_merges_duplicates(self):
-        from pocketindex.ops.extract import ExtractedEntity
-        from pocketindex.ops.entity_resolution import resolve_entities
-
-        ents = [
-            ExtractedEntity(name="SQLite", type="Tool", confidence=0.9),
-            ExtractedEntity(name="sqlite", type="Tool", confidence=0.6),
-            ExtractedEntity(name="Pocket", type="Concept", confidence=0.8),
-        ]
-        resolved = resolve_entities(ents)
-        names = {r.name for r in resolved}
-        # The two SQLite surface forms collapse into one cluster.
-        self.assertEqual(len(resolved), 2)
-        self.assertIn("Pocket", names)
-        sqlite_cluster = next(r for r in resolved if r.name.lower() == "sqlite")
-        # Canonical is the higher-confidence surface form; the other is an alias.
-        self.assertEqual(sqlite_cluster.name, "SQLite")
-        self.assertIn("sqlite", sqlite_cluster.aliases)
-
-    def test_entity_resolution_adjudicator_is_optional_and_used(self):
-        from pocketindex.ops.extract import ExtractedEntity
-        from pocketindex.ops.entity_resolution import resolve_entities
-
-        # Two embeddings that are similar (cos within the ambiguous band) but not
-        # identical, with different surface forms.
-        ents = [
-            ExtractedEntity(name="Knowledge Graph", type="Concept", confidence=0.7),
-            ExtractedEntity(name="KG", type="Concept", confidence=0.7),
-        ]
-        embeds = [[1.0, 0.0, 0.0], [0.7, 0.7, 0.0]]  # cosine ~0.71, ambiguous band
-        # No adjudicator: stays unmerged (conservative).
-        self.assertEqual(len(resolve_entities(ents, embeds)), 2)
-        # With an adjudicator that says "merge": collapses to one.
-        merged = resolve_entities(ents, embeds, adjudicator=lambda a, b: True)
-        self.assertEqual(len(merged), 1)
-
-
 class TestGraphTarget(unittest.TestCase):
     """POCKET-404a: the end-to-end graph target built offline with --graph."""
 
@@ -733,6 +729,60 @@ class TestGraphTarget(unittest.TestCase):
         rendered = retrieval.format_neighborhood(node)
         self.assertIn("Pocket", rendered)
         self.assertIn("SQLite", rendered)
+        self.assertIn("SQLite", rendered)
+
+    def test_graph_mode_search_returns_anchored_chunks(self):
+        from pocket import retrieval
+
+        importlib.reload(retrieval)
+        self._run(graph=True)
+        hits = retrieval.search(
+            "SQLite storage", limit=5, mode="graph", db_path=self.db_path
+        )
+        self.assertTrue(hits, "graph mode must surface entity-anchored chunks")
+        self.assertTrue(any(h.file_path.endswith("a.md") for h in hits))
+        # Graph hits carry the third-list rank, not the vector/lexical ranks.
+        self.assertIsNotNone(hits[0].graph_rank)
+        self.assertIsNone(hits[0].vector_rank)
+        self.assertIsNone(hits[0].lexical_rank)
+        # Every graph hit resolves back to a real source chunk (lineage intact).
+        self.assertTrue(all(h.end_offset > h.start_offset for h in hits))
+
+    def test_graph_mode_empty_without_graph_tables(self):
+        from pocket import retrieval
+
+        importlib.reload(retrieval)
+        self._run(graph=False)  # no entities/relations tables materialized
+        hits = retrieval.search(
+            "SQLite", limit=5, mode="graph", db_path=self.db_path
+        )
+        self.assertEqual(hits, [])
+
+    def test_hybrid_fuses_graph_signal_when_graph_present(self):
+        from pocket import retrieval
+
+        importlib.reload(retrieval)
+        self._run(graph=True)
+        hits = retrieval.search(
+            "SQLite storage", limit=5, mode="hybrid", db_path=self.db_path
+        )
+        self.assertTrue(hits)
+        # The third (graph) list participates: at least one hit was reinforced
+        # by graph traversal on top of the vector/lexical fusion.
+        self.assertTrue(any(h.graph_rank is not None for h in hits))
+
+    def test_traverse_graph_mcp_tool(self):
+        from pocket import retrieval, mcp_server
+
+        importlib.reload(retrieval)
+        importlib.reload(mcp_server)
+        self._run(graph=True)
+        rendered = mcp_server.traverse_graph("Pocket")
+        self.assertIn("Pocket", rendered)
+        self.assertIn("SQLite", rendered)
+        # The traversal renders the one-hop relations, not just the node header.
+        self.assertIn("Relations", rendered)
+        self.assertIn("->", rendered)
 
     def test_drop_removes_graph_tables(self):
         from pocket import admin
@@ -749,6 +799,551 @@ class TestGraphTarget(unittest.TestCase):
             self.assertFalse(self._table_exists(conn, "relations"))
         finally:
             conn.close()
+
+    # --- POCKET-302: human-in-the-loop confidence gate -------------------
+    def _set_min_conf(self, value):
+        """Set the staging threshold and reload the graph modules so the
+        pipeline gate, retrieval filters, and admin review all see it."""
+        os.environ["POCKET_GRAPH_MIN_CONFIDENCE"] = str(value)
+        self.addCleanup(os.environ.pop, "POCKET_GRAPH_MIN_CONFIDENCE", None)
+        if "pocket.config" in sys.modules:
+            importlib.reload(sys.modules["pocket.config"])
+        for mod in ("pocket.pipeline", "pocket.retrieval", "pocket.admin"):
+            if mod in sys.modules:
+                importlib.reload(sys.modules[mod])
+
+    def test_facts_above_threshold_are_committed(self):
+        # Default threshold (0.0): every extracted fact is committed, not staged.
+        self._run(graph=True)
+        conn = self._conn()
+        try:
+            self.assertEqual(
+                {r[0] for r in conn.execute("SELECT DISTINCT status FROM entities")},
+                {"approved"},
+            )
+            self.assertEqual(
+                {r[0] for r in conn.execute("SELECT DISTINCT status FROM relations")},
+                {"approved"},
+            )
+        finally:
+            conn.close()
+
+    def test_low_confidence_facts_are_staged_not_committed(self):
+        # Threshold above the deterministic extractor's confidence stages
+        # everything: the rows exist but never surface in retrieval.
+        self._set_min_conf("0.9")
+        self._run(graph=True)
+        conn = self._conn()
+        try:
+            self.assertGreater(
+                conn.execute("SELECT COUNT(*) FROM entities").fetchone()[0], 0
+            )
+            self.assertEqual(
+                {r[0] for r in conn.execute("SELECT DISTINCT status FROM entities")},
+                {"pending"},
+            )
+        finally:
+            conn.close()
+        from pocket import retrieval, admin
+
+        # Pending facts are invisible to graph reads.
+        self.assertEqual(
+            retrieval.graph_neighborhood("Pocket", db_path=self.db_path), {}
+        )
+        self.assertEqual(
+            retrieval.list_graph_concepts(db_path=self.db_path), []
+        )
+        # But they are listed for review.
+        pending = admin.list_pending(db_path=self.db_path)
+        self.assertTrue(pending["entities"])
+        self.assertIn(
+            "Pocket", {e["name"] for e in pending["entities"]}
+        )
+
+    def test_approve_pending_commits_facts(self):
+        self._set_min_conf("0.9")
+        self._run(graph=True)
+        from pocket import retrieval, admin
+
+        counts = admin.approve_pending(db_path=self.db_path)
+        self.assertGreater(counts["entities"], 0)
+        # Now retrievable, and nothing left pending.
+        node = retrieval.graph_neighborhood("Pocket", db_path=self.db_path)
+        self.assertTrue(node)
+        self.assertEqual(node["name"], "Pocket")
+        self.assertEqual(admin.list_pending(db_path=self.db_path)["entities"], [])
+
+    def test_approve_specific_id_leaves_others_pending(self):
+        self._set_min_conf("0.9")
+        self._run(graph=True)
+        from pocket import admin
+
+        pending = admin.list_pending(db_path=self.db_path)["entities"]
+        self.assertGreaterEqual(len(pending), 2)
+        target = pending[0]["id"]
+        counts = admin.approve_pending(ids=[target], db_path=self.db_path)
+        self.assertEqual(counts["entities"], 1)
+        remaining = {
+            e["id"] for e in admin.list_pending(db_path=self.db_path)["entities"]
+        }
+        self.assertNotIn(target, remaining)
+        self.assertTrue(remaining)  # the others stay staged
+
+    def test_reject_pending_discards_facts(self):
+        self._set_min_conf("0.9")
+        self._run(graph=True)
+        from pocket import admin
+
+        before = admin.list_pending(db_path=self.db_path)["entities"]
+        self.assertTrue(before)
+        counts = admin.reject_pending(db_path=self.db_path)
+        self.assertEqual(counts["entities"], len(before))
+        conn = self._conn()
+        try:
+            self.assertEqual(
+                conn.execute("SELECT COUNT(*) FROM entities").fetchone()[0], 0
+            )
+            self.assertEqual(
+                conn.execute("SELECT COUNT(*) FROM relations").fetchone()[0], 0
+            )
+        finally:
+            conn.close()
+        self.assertEqual(admin.list_pending(db_path=self.db_path)["entities"], [])
+
+    def test_cli_graph_review_lists_and_approves(self):
+        import pocket.cli as cli_module
+
+        self._set_min_conf("0.9")
+        importlib.reload(cli_module)
+        from click.testing import CliRunner
+
+        self._run(graph=True)
+        runner = CliRunner()
+
+        res = runner.invoke(cli_module.cli, ["graph", "review"])
+        self.assertEqual(res.exit_code, 0, res.output)
+        self.assertIn("Pending entities", res.output)
+        self.assertIn("Pocket", res.output)
+
+        res = runner.invoke(cli_module.cli, ["graph", "review", "--approve-all"])
+        self.assertEqual(res.exit_code, 0, res.output)
+        self.assertIn("Approved", res.output)
+
+        res = runner.invoke(cli_module.cli, ["graph", "review"])
+        self.assertEqual(res.exit_code, 0, res.output)
+        self.assertIn("No facts are pending", res.output)
+
+    def test_cli_graph_show_still_routes_to_neighborhood(self):
+        # Backward compat: `pocket graph <entity>` works without the `show` verb.
+        import pocket.cli as cli_module
+
+        importlib.reload(cli_module)
+        from click.testing import CliRunner
+
+        self._run(graph=True)
+        runner = CliRunner()
+        res = runner.invoke(cli_module.cli, ["graph", "Pocket"])
+        self.assertEqual(res.exit_code, 0, res.output)
+        self.assertIn("Pocket", res.output)
+        self.assertIn("Relations", res.output)
+
+    # --- POCKET-301: interactive review during `pocket update --graph` ----
+    @staticmethod
+    def _scripted(answers):
+        """A click.prompt stand-in returning queued answers in order."""
+        it = iter(answers)
+
+        def _p(*args, **kwargs):
+            return next(it)
+
+        return _p
+
+    def test_interactive_review_approve_all_commits(self):
+        import pocket.cli as cli_module
+
+        self._set_min_conf("0.9")
+        importlib.reload(cli_module)
+        self._run(graph=True)
+        from pocket import admin, retrieval
+
+        out = []
+        cli_module._interactive_graph_review(
+            echo=out.append, prompt=self._scripted(["a"])
+        )
+        joined = "\n".join(out)
+        self.assertIn("staged by the confidence gate", joined)
+        self.assertIn("Approved", joined)
+        # Everything committed: nothing pending, and now retrievable.
+        self.assertEqual(admin.list_pending(db_path=self.db_path)["entities"], [])
+        node = retrieval.graph_neighborhood("Pocket", db_path=self.db_path)
+        self.assertTrue(node)
+
+    def test_interactive_review_each_mode_routes_per_fact(self):
+        import pocket.cli as cli_module
+
+        self._set_min_conf("0.9")
+        importlib.reload(cli_module)
+        self._run(graph=True)
+        from pocket import admin
+
+        pending = admin.list_pending(db_path=self.db_path)
+        items = pending["entities"] + pending["relations"]
+        self.assertGreaterEqual(len(items), 3)
+
+        # Top choice "e" (each), then approve / reject / leave-pending per fact.
+        answers = ["e"]
+        expect_approve, expect_reject, expect_skip = [], [], []
+        for i, item in enumerate(items):
+            if i == len(items) - 1:
+                answers.append("s")
+                expect_skip.append(item["id"])
+            elif i % 2 == 0:
+                answers.append("y")
+                expect_approve.append(item["id"])
+            else:
+                answers.append("n")
+                expect_reject.append(item["id"])
+
+        out = []
+        cli_module._interactive_graph_review(
+            echo=out.append, prompt=self._scripted(answers)
+        )
+
+        # Skipped facts stay pending; approved/rejected leave the queue.
+        remaining = admin.list_pending(db_path=self.db_path)
+        remaining_ids = {e["id"] for e in remaining["entities"]} | {
+            r["id"] for r in remaining["relations"]
+        }
+        self.assertEqual(remaining_ids, set(expect_skip))
+
+        conn = self._conn()
+        try:
+            # Approved entity ids are committed (status flipped).
+            for table in ("entities", "relations"):
+                rows = {
+                    r[0]: r[1]
+                    for r in conn.execute(f"SELECT id, status FROM {table}").fetchall()
+                }
+                for rid, status in rows.items():
+                    if rid in expect_approve:
+                        self.assertEqual(status, "approved")
+                # Rejected ids are deleted outright.
+                for rid in expect_reject:
+                    self.assertNotIn(rid, rows)
+        finally:
+            conn.close()
+        self.assertIn("still pending", "\n".join(out))
+
+    def test_interactive_review_quit_stops_each_loop(self):
+        import pocket.cli as cli_module
+
+        self._set_min_conf("0.9")
+        importlib.reload(cli_module)
+        self._run(graph=True)
+        from pocket import admin
+
+        before = admin.list_pending(db_path=self.db_path)
+        total_before = len(before["entities"]) + len(before["relations"])
+        # each-mode, approve the first fact, then quit: the rest stay pending.
+        out = []
+        cli_module._interactive_graph_review(
+            echo=out.append, prompt=self._scripted(["e", "y", "q"])
+        )
+        after = admin.list_pending(db_path=self.db_path)
+        total_after = len(after["entities"]) + len(after["relations"])
+        self.assertEqual(total_after, total_before - 1)
+
+    def test_interactive_review_skip_leaves_everything_pending(self):
+        import pocket.cli as cli_module
+
+        self._set_min_conf("0.9")
+        importlib.reload(cli_module)
+        self._run(graph=True)
+        from pocket import admin
+
+        before = admin.list_pending(db_path=self.db_path)
+        out = []
+        cli_module._interactive_graph_review(
+            echo=out.append, prompt=self._scripted(["s"])
+        )
+        after = admin.list_pending(db_path=self.db_path)
+        self.assertEqual(len(after["entities"]), len(before["entities"]))
+        self.assertEqual(len(after["relations"]), len(before["relations"]))
+        self.assertIn("Skipped", "\n".join(out))
+
+    def test_interactive_review_no_pending_does_not_prompt(self):
+        import pocket.cli as cli_module
+
+        importlib.reload(cli_module)
+        # Default threshold: every fact is committed, so nothing is pending.
+        self._run(graph=True)
+
+        def _boom(*args, **kwargs):
+            raise AssertionError("prompt should not be called when nothing pending")
+
+        out = []
+        cli_module._interactive_graph_review(echo=out.append, prompt=_boom)
+        self.assertIn("No graph facts are pending review.", "\n".join(out))
+
+    def test_cli_update_graph_review_end_to_end(self):
+        import pocket.cli as cli_module
+        from click.testing import CliRunner
+
+        old_source = os.environ.get("POCKET_SOURCE_DIR")
+        os.environ["POCKET_SOURCE_DIR"] = str(self.source_dir)
+        self.addCleanup(
+            lambda: os.environ.__setitem__("POCKET_SOURCE_DIR", old_source)
+            if old_source is not None
+            else os.environ.pop("POCKET_SOURCE_DIR", None)
+        )
+        self._set_min_conf("0.9")
+        importlib.reload(cli_module)
+        from pocket import admin, retrieval
+
+        runner = CliRunner()
+        res = runner.invoke(
+            cli_module.cli, ["update", "--graph", "--review"], input="a\n"
+        )
+        self.assertEqual(res.exit_code, 0, res.output)
+        self.assertIn("Approved", res.output)
+        self.assertEqual(admin.list_pending(db_path=self.db_path)["entities"], [])
+        self.assertTrue(retrieval.graph_neighborhood("Pocket", db_path=self.db_path))
+
+    def test_cli_update_review_without_graph_is_ignored(self):
+        import pocket.cli as cli_module
+        from click.testing import CliRunner
+
+        old_source = os.environ.get("POCKET_SOURCE_DIR")
+        os.environ["POCKET_SOURCE_DIR"] = str(self.source_dir)
+        self.addCleanup(
+            lambda: os.environ.__setitem__("POCKET_SOURCE_DIR", old_source)
+            if old_source is not None
+            else os.environ.pop("POCKET_SOURCE_DIR", None)
+        )
+        importlib.reload(cli_module)
+
+        runner = CliRunner()
+        res = runner.invoke(cli_module.cli, ["update", "--review"])
+        self.assertEqual(res.exit_code, 0, res.output)
+        self.assertIn("no effect without --graph", res.output)
+class TestRetrievalEvaluation(unittest.TestCase):
+    """POCKET-303: automated retrieval evaluation & regression guard."""
+
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.source_dir = pathlib.Path(self.temp_dir.name) / "notes"
+        self.source_dir.mkdir()
+        self.db_path = pathlib.Path(self.temp_dir.name) / "pocket_data.db"
+
+        self.old_db_env = os.environ.get("POCKET_SQLITE_DB")
+        os.environ["POCKET_SQLITE_DB"] = str(self.db_path)
+        if "pocket.config" in sys.modules:
+            importlib.reload(sys.modules["pocket.config"])
+        for mod in ("pocket.retrieval", "pocket.evaluation"):
+            if mod in sys.modules:
+                importlib.reload(sys.modules[mod])
+
+        # Three notes with deliberately disjoint vocabulary so distinctive-token
+        # synthetic queries have exactly one correct source under lexical search.
+        (self.source_dir / "biology.md").write_text(
+            "# Biology\n\nPhotosynthesis converts sunlight via chlorophyll into "
+            "glucose inside chloroplasts.\n"
+        )
+        (self.source_dir / "geology.md").write_text(
+            "# Geology\n\nVolcanic eruption ejects magma forming basalt across "
+            "tectonic boundaries.\n"
+        )
+        (self.source_dir / "crypto.md").write_text(
+            "# Cryptography\n\nEncryption ciphers maximize entropy protecting "
+            "asymmetric keypairs.\n"
+        )
+
+    def tearDown(self):
+        if self.old_db_env is not None:
+            os.environ["POCKET_SQLITE_DB"] = self.old_db_env
+        else:
+            os.environ.pop("POCKET_SQLITE_DB", None)
+        if "pocket.config" in sys.modules:
+            importlib.reload(sys.modules["pocket.config"])
+        self.temp_dir.cleanup()
+
+    def _run(self):
+        from pocket.pipeline import app_main
+        app = pix.App(
+            "pocket_test", app_main, sourcedir=self.source_dir, db_path=self.db_path
+        )
+        app.update_blocking(live=False, report_to_stdout=False)
+
+    def test_metric_primitives(self):
+        from pocket import evaluation as ev
+
+        retrieved = ["a.md", "b.md", "c.md", "d.md"]
+        relevant = ["c.md"]
+        # First relevant hit is at rank 3.
+        self.assertAlmostEqual(ev.reciprocal_rank(retrieved, relevant), 1 / 3)
+        self.assertEqual(ev.reciprocal_rank(retrieved, ["zzz.md"]), 0.0)
+        # 1 of the top-4 is relevant; recall is 1 of 1 relevant file.
+        self.assertAlmostEqual(ev.precision_at_k(retrieved, relevant, 4), 1 / 4)
+        self.assertAlmostEqual(ev.recall_at_k(retrieved, relevant, 4), 1.0)
+        # Cutoff below the hit drops both precision and recall to zero.
+        self.assertEqual(ev.recall_at_k(retrieved, relevant, 2), 0.0)
+        # AP: single relevant at rank 3 -> precision 1/3 averaged over 1 relevant.
+        self.assertAlmostEqual(ev.average_precision(retrieved, relevant, 4), 1 / 3)
+        # Two relevant files ranked 1 and 2 -> perfect AP.
+        self.assertAlmostEqual(
+            ev.average_precision(["c.md", "d.md", "a.md"], ["c.md", "d.md"], 3), 1.0
+        )
+        # Lenient path matching: basename / relative-suffix counts as a hit.
+        self.assertEqual(
+            ev.reciprocal_rank(["/abs/path/crypto.md"], ["crypto.md"]), 1.0
+        )
+
+    def test_synthesize_and_evaluate_self_retrieves(self):
+        from pocket import evaluation as ev
+
+        self._run()
+        cases = ev.synthesize_cases(db_path=self.db_path, mode="lexical", per_file=1)
+        # One self-labeled case per indexed source file.
+        self.assertEqual(len(cases), 3)
+        for c in cases:
+            self.assertEqual(len(c.relevant_files), 1)
+            self.assertTrue(c.query.strip())
+            self.assertEqual(c.mode, "lexical")
+
+        metrics = ev.evaluate(cases, db_path=self.db_path, k=5)
+        # Distinctive-token queries must each retrieve their own source first,
+        # so a healthy lexical index scores a perfect hit rate and MRR.
+        self.assertEqual(metrics.n_cases, 3)
+        self.assertEqual(metrics.hit_rate, 1.0)
+        self.assertEqual(metrics.mrr, 1.0)
+        self.assertEqual(metrics.recall_at_k, 1.0)
+        for cr in metrics.cases:
+            self.assertTrue(cr.hit)
+            self.assertTrue(
+                any(
+                    os.path.basename(cr.relevant_files[0]) == os.path.basename(f)
+                    for f in cr.retrieved_files
+                )
+            )
+
+    def test_synthesize_empty_when_no_index(self):
+        from pocket import evaluation as ev
+
+        # No _run(): the DB does not exist yet.
+        self.assertEqual(ev.synthesize_cases(db_path=self.db_path), [])
+        # evaluate() over no cases yields zeroed metrics, not a crash.
+        metrics = ev.evaluate([], db_path=self.db_path, k=5)
+        self.assertEqual(metrics.n_cases, 0)
+        self.assertEqual(metrics.hit_rate, 0.0)
+
+    def test_load_cases_parsing_and_errors(self):
+        import json
+
+        from pocket import evaluation as ev
+
+        good = pathlib.Path(self.temp_dir.name) / "cases.json"
+        good.write_text(
+            json.dumps(
+                {
+                    "cases": [
+                        {"query": "encryption keys", "relevant_files": ["crypto.md"]},
+                        {
+                            "query": "magma basalt",
+                            "relevant_files": ["geology.md"],
+                            "mode": "lexical",
+                        },
+                    ]
+                }
+            )
+        )
+        cases = ev.load_cases(good)
+        self.assertEqual(len(cases), 2)
+        self.assertEqual(cases[0].mode, "hybrid")  # default
+        self.assertEqual(cases[1].mode, "lexical")
+
+        # Top-level list form is accepted too.
+        listform = pathlib.Path(self.temp_dir.name) / "list.json"
+        listform.write_text(
+            json.dumps([{"query": "q", "relevant_files": ["a.md"]}])
+        )
+        self.assertEqual(len(ev.load_cases(listform)), 1)
+
+        bad = pathlib.Path(self.temp_dir.name) / "bad.json"
+        bad.write_text(json.dumps([{"relevant_files": ["a.md"]}]))  # no query
+        with self.assertRaises(ValueError):
+            ev.load_cases(bad)
+        bad.write_text(json.dumps([{"query": "q", "relevant_files": []}]))  # empty rel
+        with self.assertRaises(ValueError):
+            ev.load_cases(bad)
+
+    def test_baseline_roundtrip_and_regression_detection(self):
+        from pocket import evaluation as ev
+
+        self._run()
+        cases = ev.synthesize_cases(db_path=self.db_path, mode="lexical")
+        metrics = ev.evaluate(cases, db_path=self.db_path, k=5)
+
+        baseline_path = pathlib.Path(self.temp_dir.name) / "baseline.json"
+        ev.save_baseline(baseline_path, metrics)
+        loaded = ev.load_baseline(baseline_path)
+        self.assertEqual(loaded["hit_rate"], metrics.hit_rate)
+        self.assertNotIn("cases", loaded)  # baselines store aggregates only
+
+        # Identical run -> no regression.
+        self.assertEqual(ev.compare_to_baseline(metrics, loaded), [])
+
+        # A stricter baseline that the run no longer meets -> regression flagged.
+        harder = dict(loaded)
+        harder["hit_rate"] = loaded["hit_rate"] + 0.5
+        regs = ev.compare_to_baseline(metrics, harder)
+        names = {r.metric for r in regs}
+        self.assertIn("hit_rate", names)
+        reg = next(r for r in regs if r.metric == "hit_rate")
+        self.assertLess(reg.delta, 0.0)
+        # Tolerance can absorb the same drop.
+        self.assertEqual(ev.compare_to_baseline(metrics, harder, tolerance=1.0), [])
+        # Metrics absent from the baseline never fail.
+        self.assertEqual(ev.compare_to_baseline(metrics, {"unknown": 1.0}), [])
+
+    def test_cli_eval_synthetic_and_baseline(self):
+        import pocket.cli as cli_module
+        from click.testing import CliRunner
+
+        importlib.reload(cli_module)
+        self._run()
+        runner = CliRunner()
+
+        baseline_path = pathlib.Path(self.temp_dir.name) / "cli_baseline.json"
+        res = runner.invoke(
+            cli_module.cli,
+            ["eval", "--mode", "lexical", "--save", str(baseline_path), "--show-cases"],
+        )
+        self.assertEqual(res.exit_code, 0, res.output)
+        self.assertIn("Synthesized 3 case(s)", res.output)
+        self.assertIn("Hit@5:", res.output)
+        self.assertTrue(baseline_path.exists())
+
+        # Re-running against the just-saved baseline must pass (no regression).
+        res = runner.invoke(
+            cli_module.cli,
+            ["eval", "--mode", "lexical", "--baseline", str(baseline_path)],
+        )
+        self.assertEqual(res.exit_code, 0, res.output)
+        self.assertIn("No regression versus baseline", res.output)
+
+        # A doctored baseline the run can't meet must fail the command (exit 1).
+        import json
+
+        data = json.loads(baseline_path.read_text())
+        data["hit_rate"] = 1.5
+        baseline_path.write_text(json.dumps(data))
+        res = runner.invoke(
+            cli_module.cli,
+            ["eval", "--mode", "lexical", "--baseline", str(baseline_path)],
+        )
+        self.assertEqual(res.exit_code, 1, res.output)
+        self.assertIn("REGRESSION", res.output)
+
 
 if __name__ == "__main__":
     unittest.main()

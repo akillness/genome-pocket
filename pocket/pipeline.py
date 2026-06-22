@@ -1,17 +1,17 @@
 import json
 import pathlib
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict
 from typing import Annotated, AsyncIterator, List, Tuple
 import numpy as np
 from numpy.typing import NDArray
 
 import pocketindex as pix
 from pocketindex.connectors import localfs, sqlite
-from pocketindex.ops.sentence_transformers import SentenceTransformerEmbedder
+from pocketindex.ops.sentence_transformers import SentenceTransformerEmbedder, build_embedder
 from pocketindex.resources.file import FileLike
 from pocketindex.ops.text import RecursiveSplitter, detect_code_language
 from pocketindex.ops.refine import TextRefiner
-from pocketindex.ops.extract import build_extractor, ExtractedEntity
+from pocketindex.ops.extract import build_extractor, ExtractedEntity, SqliteExtractionStore
 from pocketindex.ops.entity_resolution import resolve_entities, normalize
 from pocketindex.resources.id import IdGenerator
 from pocketindex.resources.chunk import Chunk
@@ -47,6 +47,8 @@ class EntityNode:
     confidence: float                         # Max extraction confidence
     source_file: str                          # Primary chunk's source file (lineage anchor)
     source_chunk_ids: str                     # JSON list of chunk ids mentioning this entity
+    resolution: str = "[]"                    # JSON merge audit trail (POCKET-404c)
+    status: str = "approved"                  # "approved" | "pending" (HITL gate, POCKET-302)
 
 
 @dataclass
@@ -61,6 +63,7 @@ class RelationEdge:
     confidence: float                         # Extraction confidence
     source_file: str                          # Lineage anchor
     source_chunk_id: int                      # Chunk the edge was extracted from
+    status: str = "approved"                  # "approved" | "pending" (HITL gate, POCKET-302)
 
 
 _splitter = RecursiveSplitter()
@@ -69,8 +72,9 @@ _refiner = TextRefiner()
 @pix.lifespan
 async def pocket_lifespan(builder: pix.EnvironmentBuilder) -> AsyncIterator[None]:
     import os
-    # Provide the SentenceTransformerEmbedder
-    builder.provide(EMBEDDER, SentenceTransformerEmbedder(config.EMBEDDING_MODEL))
+    # Provide the embedder backend for the active model (text-only
+    # SentenceTransformer, or multimodal SigLIP2 when a siglip2 id is selected).
+    builder.provide(EMBEDDER, build_embedder(config.EMBEDDING_MODEL))
     # Provide the SQLite ManagedConnection
     db_path = os.getenv("POCKET_SQLITE_DB") or str(config.POCKET_SQLITE_DB)
     builder.provide_with(SQLITE_DB, sqlite.managed_connection(db_path, load_vec=True))
@@ -116,6 +120,31 @@ async def process_chunk(
 
 @pix.fn(memo=True)
 async def process_file(file: FileLike, table: sqlite.TableTarget[ChunkEmbedding]) -> None:
+    # Image files take the multimodal path when the active embedder supports it;
+    # otherwise (text-only model) the image source is seen for lineage but emits
+    # no rows. Routing here (not as a second mount_each) keeps a single sweep over
+    # the shared `embeddings` target so neither modality garbage-collects the other.
+    if getattr(file, "is_image", False):
+        embedder = pix.use_context(EMBEDDER)
+        if not getattr(embedder, "supports_image", False):
+            return
+        filename = file.file_path.path
+        # An image is one atomic unit (no refine/split) -> exactly one row whose
+        # vector is the SigLIP2 image embedding. `text` is the relative path so the
+        # hit still has a lexical handle and a lineage citation.
+        embedding = await embedder.embed_image(filename)
+        id_gen = IdGenerator()
+        path_str = str(filename)
+        table.declare_row(row=ChunkEmbedding(
+            id=await id_gen.next_id(path_str),
+            file_path=path_str,
+            text=path_str,
+            embedding=embedding,
+            start_offset=0,
+            end_offset=0,
+        ))
+        return
+
     raw_text = await file.read_text()
     # Detect whether this is source code from its filename. Code files get an
     # indentation-preserving refine pass and language-aware (structural)
@@ -149,7 +178,15 @@ async def extract_graph_file(
     filename = file.file_path.path
     chunks = _chunk_file(raw_text, filename)
 
-    extractor = build_extractor(config.POCKET_LLM_PROVIDER, config.POCKET_LLM_MODEL)
+    # Persist the extraction cache (POCKET-404b) in the same SQLite DB for the
+    # LLM backends so an unchanged chunk under an unchanged prompt is never
+    # re-sent across runs. The deterministic backend is pure/cheap and stays
+    # unwrapped, so default runs gain no new table.
+    provider = (config.POCKET_LLM_PROVIDER or "deterministic").lower()
+    store = None
+    if provider in ("ollama", "airllm"):
+        store = SqliteExtractionStore(pix.use_context(SQLITE_DB).conn)
+    extractor = build_extractor(provider, config.POCKET_LLM_MODEL, store=store)
     id_gen = IdGenerator()
 
     # Collect every extracted entity across the file's chunks, remembering which
@@ -199,35 +236,45 @@ async def extract_graph_file(
             confidence=r.confidence,
             source_file=str(filename),
             source_chunk_ids=json.dumps(chunk_ids),
+            resolution=json.dumps([asdict(m) for m in r.merges]),
         )
         id_to_node[ent_id] = node
         for member in r.members:
             surface_to_id[normalize(member.name)] = ent_id
 
-    # Commit entity nodes (HITL gate: skip facts below the confidence threshold).
+    # Commit entity nodes. The HITL gate (POCKET-302) does NOT drop low-confidence
+    # facts; it stages them as ``status="pending"`` so ``pocket graph review`` can
+    # approve or reject them. Retrieval defaults to approved-only, so pending facts
+    # stay out of search results until a human accepts them.
     for node in id_to_node.values():
-        if node.confidence < min_conf:
-            continue
+        node.status = "approved" if node.confidence >= min_conf else "pending"
         entities_target.declare_row(row=node)
 
-    # Rewire and commit edges to canonical entity ids.
+    # Rewire and commit edges to canonical entity ids. Edges below the gate, or
+    # whose endpoints are themselves staged, are written as ``status="pending"``
+    # (not dropped) so the whole low-confidence fact is reviewable together.
     seen_edge_ids = set()
     for rel, chunk_id in relations:
         subj_id = surface_to_id.get(normalize(rel.subject))
         obj_id = surface_to_id.get(normalize(rel.object))
         if subj_id is None or obj_id is None or subj_id == obj_id:
             continue
-        if rel.confidence < min_conf:
-            continue
-        # Both endpoints must actually be committed nodes.
+        # Both endpoints must actually be extracted nodes.
         if subj_id not in id_to_node or obj_id not in id_to_node:
-            continue
-        if id_to_node[subj_id].confidence < min_conf or id_to_node[obj_id].confidence < min_conf:
             continue
         edge_id = await id_gen.next_id(f"{subj_id}\x00{rel.predicate}\x00{obj_id}")
         if edge_id in seen_edge_ids:
             continue
         seen_edge_ids.add(edge_id)
+        endpoints_pending = (
+            id_to_node[subj_id].status == "pending"
+            or id_to_node[obj_id].status == "pending"
+        )
+        edge_status = (
+            "approved"
+            if rel.confidence >= min_conf and not endpoints_pending
+            else "pending"
+        )
         relations_target.declare_row(row=RelationEdge(
             id=edge_id,
             subject_id=subj_id,
@@ -237,6 +284,7 @@ async def extract_graph_file(
             confidence=rel.confidence,
             source_file=str(filename),
             source_chunk_id=chunk_id,
+            status=edge_status,
         ))
 
     # The entities target's memo (set by the engine) is the incremental key; the
@@ -279,7 +327,12 @@ async def app_main(
             table_name="relations",
             table_schema=await sqlite.TableSchema.from_class(RelationEdge, primary_key=["id"]),
         )
-        graph_items = files.items()
+        # Graph extraction is text-only; images have no read_text() path, so they
+        # are excluded from the entity/relation pass.
+        graph_items = {
+            k: v for k, v in files.items().items()
+            if not getattr(v, "is_image", False)
+        }
         # The graph pass's primary lineage/memo target is `entities`; relations are
         # driven manually inside the component and swept here afterwards.
         await pix.mount_each(

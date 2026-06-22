@@ -1,6 +1,5 @@
 # genome-pocket 🧬
 
-[![Build Status](https://github.com/akillness/genome-pocket/actions/workflows/ci.yml/badge.svg)](https://github.com/akillness/genome-pocket/actions)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python Version](https://img.shields.io/badge/python-3.12%2B-blue.svg)](https://www.python.org/downloads/)
 [![Self-contained engine](https://img.shields.io/badge/engine-self--contained-green.svg)](#-concept--architecture)
@@ -39,6 +38,7 @@ flowchart LR
     end
     subgraph XF["3 · Transform (PocketIndex ETL)"]
         SPLIT["RecursiveSplitter<br/>code-aware"]
+        SEMSPLIT["SemanticSplitter ⚡<br/>embedding-guided (opt-in)"]
         EMB["SentenceTransformer<br/>Qwen3-Embedding-0.6B (default)"]
         IDG["IdGenerator<br/>deterministic · memo"]
     end
@@ -48,16 +48,20 @@ flowchart LR
         LIN["lineage · memo"]
     end
     subgraph SERVE["5 · Serve (retrieval.py)"]
+        HYDE["HyDE expansion ⚡<br/>hypothetical doc embed (opt-in)"]
         RRF["Hybrid retrieval<br/>Reciprocal Rank Fusion"]
+        RERANK["Cross-encoder Reranker ⚡<br/>ms-marco-MiniLM (opt-in)"]
         CLI["CLI"]
         MCP["MCP"]
         API["REST + Web UI"]
     end
     GRAPH["Knowledge Graph (optional)<br/>entities + relations · GraphRAG"]
-    EVAL["pocket eval<br/>Hit@k · MRR · MAP regression gate"]
+    EVAL["pocket eval<br/>Hit@k · MRR · MAP · LLM Judge ⚡"]
 
     SRC --> REF --> XF --> LOAD --> SERVE
-    RRF --> CLI & MCP & API
+    SPLIT -. "POCKET_SEMANTIC_SPLIT" .-> SEMSPLIT
+    HYDE -. "expand" .-> RRF
+    RRF --> RERANK --> CLI & MCP & API
     XF -. "--graph" .-> GRAPH
     GRAPH -. extract .-> LOAD
     GRAPH -. augment .-> RRF
@@ -154,6 +158,49 @@ POCKET_GRAPH=0                      # or pass `pocket update --graph` per-run
 POCKET_LLM_PROVIDER=deterministic   # deterministic (offline) | ollama | airllm
 # POCKET_LLM_MODEL=                  # backend-specific model id (optional)
 POCKET_GRAPH_MIN_CONFIDENCE=0.0     # facts below this are staged for HITL review
+
+# --- Optional: result diversity (MMR, POCKET-501) ---
+# Off by default (deterministic RRF order). When on, fused candidates are
+# re-ranked with Maximal Marginal Relevance so near-duplicate chunks (e.g.
+# several from one file) don't crowd the top-k. Override per-query with
+# `pocket search ... --mmr/--no-mmr`.
+POCKET_MMR=0
+POCKET_MMR_LAMBDA=0.5               # 1.0 = pure relevance, 0.0 = pure diversity
+
+# --- Optional: weighted / tunable RRF (POCKET-502) ---
+# Per-strategy fusion weights. 1.0 each == plain (equal-weight) RRF, so search
+# is unchanged until tuned. `pocket eval --tune --save-weights tuned.json`
+# grid-searches these against the eval harness; point POCKET_RRF_WEIGHTS_FILE at
+# the result to apply it (the file overrides the *_WEIGHT env defaults below).
+POCKET_RRF_VECTOR_WEIGHT=1.0
+POCKET_RRF_LEXICAL_WEIGHT=1.0
+POCKET_RRF_GRAPH_WEIGHT=1.0
+# POCKET_RRF_WEIGHTS_FILE=tuned.json
+# POCKET_RRF_WEIGHTS_FILE=tuned.json
+
+# --- Optional: 2026 SOTA improvements ---
+# All features are OFF by default; existing behaviour is fully preserved.
+
+# Cross-encoder reranker (POCKET-601) — runs after RRF/MMR for a precision pass.
+# Default model: cross-encoder/ms-marco-MiniLM-L-6-v2 (33 MB, CPU ~50 ms/query).
+POCKET_RERANKER=0
+# POCKET_RERANKER_MODEL=cross-encoder/ms-marco-MiniLM-L-6-v2
+POCKET_RERANKER_TOP_N=20             # candidates fed into the reranker
+
+# HyDE — Hypothetical Document Embeddings (POCKET-602).
+# Generates a short "hypothetical answer" via Ollama, embeds it, and uses that
+# vector for retrieval. BM25 always uses the original query. Falls back silently
+# to the original query if Ollama is unavailable.
+POCKET_HYDE=0
+# POCKET_HYDE_OLLAMA_MODEL=qwen3:0.6b
+# POCKET_HYDE_OLLAMA_HOST=http://localhost:11434
+
+# Semantic chunking (POCKET-603) — splits on embedding-guided meaning boundaries
+# instead of fixed character counts. Only applied to prose/markdown; code files
+# always use RecursiveSplitter. Falls back on encoding failure.
+POCKET_SEMANTIC_SPLIT=0
+# POCKET_SEMANTIC_SPLIT_THRESHOLD=0.3  # cosine-drop threshold for a new chunk
+
 ```
 
 > **Changing `EMBEDDING_MODEL`** changes the vector dimension. The source
@@ -200,7 +247,19 @@ incremental engine actually did against your logs:
 pocket search "What is Pocket?"               # hybrid (vector + lexical) by default
 pocket search "vec_distance_cosine" --mode lexical   # exact keyword / symbol match
 pocket search "how does incremental sync work" --mode vector
+pocket search "incremental sync" --json       # agent-native: pure JSON on stdout, status on stderr
+pocket search "embeddings" --mmr              # re-rank for diversity (MMR); --no-mmr forces plain RRF
+pocket search "embeddings" --rerank           # cross-encoder precision pass after RRF (POCKET-601)
+pocket search "embeddings" --hyde             # HyDE query expansion via Ollama (POCKET-602)
+pocket search "embeddings" --rerank --hyde    # stack both for maximum recall+precision
 ```
+
+The `--json` flag emits `{query, mode, count, hits[]}` (each hit with full
+`file_path`/`text`/`start_offset`/`end_offset`/`score` lineage) as pure JSON on
+stdout — status/diagnostic lines go to stderr — so a calling agent or pipeline
+can parse `pocket search` output the same way it consumes the REST `/search`
+and MCP `search_knowledge` surfaces.
+
 
 #### Build & Query the Knowledge Graph (optional, GraphRAG)
 The graph branch is **opt-in**. When enabled, the same incremental pass extracts
@@ -239,7 +298,17 @@ pocket eval --mode hybrid --k 5 --show-cases   # exercise the semantic path, pri
 pocket eval --cases gold.json                  # hand-written {query, relevant_files[, mode]} set
 pocket eval --save baseline.json               # record this run as a regression baseline
 pocket eval --baseline baseline.json --tolerance 0.01   # fail CI if any metric dropped
+pocket eval --tune --save-weights tuned.json   # grid-search RRF weights; save the winner
+pocket eval --with-judge                       # add LLM-as-judge Faithfulness + Relevance scores (POCKET-604)
+pocket eval --with-judge --judge-model qwen3:8b  # use a specific Ollama model as judge
 ```
+
+With `--tune` the harness becomes an **optimizer** (POCKET-502): it grid-searches
+the per-strategy fusion weights against the same cases, reports the best vs the
+equal-weight baseline (it can never do worse — `1.0` is always probed), and with
+`--save-weights` persists the winner. Point `POCKET_RRF_WEIGHTS_FILE` at that file
+to apply the tuned weights to every `pocket search` and `pocket eval` run.
+
 
 Metrics reported: `Hit@k`, `MRR`, `Precision@k`, `Recall@k`, `MAP@k`.
 
@@ -271,6 +340,55 @@ curl -X POST http://127.0.0.1:8000/search -H 'Content-Type: application/json' \
 
 
 ---
+---
+
+## ⚡ 2026 SOTA Research Improvements
+
+Four SOTA improvements from recent ML research, all **opt-in** and backward-compatible — existing pipelines are unchanged until a flag or env var is set.
+
+### 1. Cross-encoder Reranker (`POCKET_RERANKER=1` / `--rerank`)
+
+After hybrid RRF fusion, a lightweight cross-encoder (`cross-encoder/ms-marco-MiniLM-L-6-v2`, 33 MB) re-scores each candidate with full query × passage attention. This two-stage retrieve-then-rerank pattern consistently gains +5–15% MRR over single-stage dense retrieval on BEIR benchmarks.
+
+bash
+pocket search "incremental sync" --rerank          # enable per-query
+POCKET_RERANKER=1 pocket search "incremental sync" # enable globally
+
+
+Upgrade path: set `POCKET_RERANKER_MODEL=BAAI/bge-reranker-v2-m3` for a multilingual SOTA model.
+
+### 2. HyDE — Hypothetical Document Embeddings (`POCKET_HYDE=1` / `--hyde`)
+
+Before vector search, Ollama generates a short "hypothetical answer" passage for the query. The embedding of that passage (not the query string) is used as the search vector — bridging the query–document vocabulary gap that asymmetric embedding models still leave. BM25 always uses the original query; silent fallback to original query if Ollama is unavailable.
+
+bash
+pocket search "how does semantic chunking work" --hyde
+pocket search "how does semantic chunking work" --hyde --rerank  # stack both
+
+
+### 3. Semantic Chunking (`POCKET_SEMANTIC_SPLIT=1`)
+
+Replaces fixed-character splitting with embedding-guided boundary detection for prose and Markdown. Sentences are encoded in one batch pass; a cosine-drop threshold marks paragraph-level meaning shifts as chunk boundaries. Code files always use `RecursiveSplitter` (structure > semantics for code).
+
+bash
+POCKET_SEMANTIC_SPLIT=1 pocket update   # re-index with semantic chunks
+POCKET_SEMANTIC_SPLIT_THRESHOLD=0.25    # tighter threshold → more/smaller chunks
+
+
+### 4. LLM-as-Judge Evaluation (`pocket eval --with-judge`)
+
+Adds RAGAS-style **Faithfulness** and **Answer Relevance** scoring alongside standard IR metrics. A local Ollama model grades each retrieved chunk against the query on a 0–1 scale; scores are averaged and reported in the eval summary. Neutral (0.5) fallback when Ollama is unavailable — standard IR metrics are never affected.
+
+bash
+pocket eval --with-judge                          # judge with default model
+pocket eval --with-judge --judge-model qwen3:8b  # choose the judge model
+
+
+### 5. Schema-constrained JSON Extraction
+
+`OllamaExtractor` now sends a full JSON Schema to Ollama ≥ 0.3.0 via the `format` object API, enforcing grammar-constrained decoding. This eliminates malformed-JSON failures in 7–9B entity-extraction models. Automatically falls back to `"format":"json"` on HTTP 400 (older Ollama versions) with zero retry overhead.
+
+---
 
 ## 📚 Documentation
 
@@ -282,6 +400,8 @@ Design docs live under [`docs/architecture/`](docs/architecture/):
 - [`graph-target.md`](docs/architecture/graph-target.md) — Graph Target & Knowledge-Graph Ops design spec: entity/relation extraction and the GraphRAG branch (POCKET-404).
 - [`ops-layer.md`](docs/architecture/ops-layer.md) — Ops Layer: evaluation, tracing, and the human-in-the-loop (HITL) review gate.
 - [`mcp-server.md`](docs/architecture/mcp-server.md) — Model Context Protocol (MCP) Integration: how Pocket exposes tools to Claude Code / Cursor.
+- [`mcp-server.md`](docs/architecture/mcp-server.md) — Model Context Protocol (MCP) Integration: how Pocket exposes tools to Claude Code / Cursor.
+- [`2026-research-improvements.md`](docs/architecture/2026-research-improvements.md) — 2026 SOTA improvements: reranker, HyDE, semantic chunking, LLM judge, schema-constrained extraction — design rationale, SOTA model comparisons, and priority matrix.
 
 ---
 
@@ -314,7 +434,7 @@ Genome-pocket is evolving toward full adoption of the `cocoindex` runtime. The p
 
 | Phase | What | Status |
 |-------|------|--------|
-| P0 | **Test infra** — `MockEmbedder` session patch; the whole suite (now 81 tests) runs offline in < 10 s | ✅ done |
+| P0 | **Test infra** — `MockEmbedder` session patch; the whole suite (now 113 tests) runs offline in < 10 s via `bash run_tests.sh` | ✅ done |
 | P1 | **Content fingerprinting** — `cocoindex.connectorkits.fingerprint` replaces SHA-256 in `_compute_memo_hash`; unchanged files skip re-index | ✅ done |
 | P2 | **Concurrent `map()`** — `asyncio.gather` replaces sequential loop; matches real cocoindex contract | ✅ done |
 | P3 | **`list_concepts` MCP** — live graph query via `retrieval.list_graph_concepts()`; `POCKET_GRAPH=1` guard | ✅ done |
@@ -322,4 +442,15 @@ Genome-pocket is evolving toward full adoption of the `cocoindex` runtime. The p
 | P5 | **Persistent memo store** — SQLite-backed `@fn(memo=True)` that survives restarts | ⏳ planned |
 | P6 | **Native cocoindex PoC** — `pocket/pipeline_coco.py` (run via `POCKET_PIPELINE=coco`): real cocoindex splitter/embedder ops wired in; full `App`/`fn`/`map` engine swap pending | 🚧 in progress |
 
+**2026 SOTA improvements** (shipped):
+
+| ID | What | Status |
+|----|------|--------|
+| POCKET-601 | **Cross-encoder Reranker** — `sentence_transformers.CrossEncoder` precision pass after RRF; `POCKET_RERANKER=1` / `--rerank` | ✅ done |
+| POCKET-602 | **HyDE** — Ollama-generated hypothetical passage embedding for vector search; `POCKET_HYDE=1` / `--hyde` | ✅ done |
+| POCKET-603 | **Semantic Chunking** — `SemanticSplitter` embedding-guided boundary detection for prose; `POCKET_SEMANTIC_SPLIT=1` | ✅ done |
+| POCKET-604 | **LLM-as-Judge eval** — RAGAS-style Faithfulness + Relevance scoring via local Ollama; `pocket eval --with-judge` | ✅ done |
+| POCKET-605 | **Schema-constrained JSON extraction** — Ollama ≥ 0.3.0 `format:{schema}` grammar-constrained decoding in `OllamaExtractor` | ✅ done |
+| POCKET-606 | **LanceDB connector** — columnar vector store for large corpora (>1 M chunks) | ⏳ planned |
+| POCKET-607 | **GraphRAG community detection** — Leiden algorithm over entity graph; community-level summaries | ⏳ planned |
 See [`docs/architecture/cocoindex-gap.md`](docs/architecture/cocoindex-gap.md) for the full gap analysis, missing APIs, and migration sequencing.

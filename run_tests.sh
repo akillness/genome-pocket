@@ -1,30 +1,18 @@
 #!/bin/bash
-# Run tests in separate processes to avoid global state contamination in CocoIndex
+# Run the full genome-pocket test suite.
+#
+# The suite is designed around the session-scoped, autouse MockEmbedder fixture
+# in tests/conftest.py, which swaps every embedding path to a deterministic,
+# offline fake. That fixture is a *pytest* fixture, so the suite MUST be driven
+# by pytest — running individual classes via `python -m unittest` silently
+# bypasses the patch and falls back to downloading/loading real model weights
+# (slow, network-dependent, and non-deterministic).
+#
+# pytest auto-discovers every test module (test_pipeline, test_retrieval_api,
+# test_graph_unit, test_multimodal), so this runner can never go stale as test
+# classes are added or moved.
 set -e
-echo "Running MCP tools test..."
-uv run python -m unittest tests.test_pipeline.TestPocketPipeline.test_mcp_tools
-echo "Running pipeline and search test..."
-uv run python -m unittest tests.test_pipeline.TestPocketPipeline.test_pipeline_and_search
-echo "Running incremental memoization test (DoD #3)..."
-uv run python -m unittest tests.test_pipeline.TestPocketPipeline.test_incremental_memoization
-echo "Running deletion propagation test (DoD #4)..."
-uv run python -m unittest tests.test_pipeline.TestPocketPipeline.test_deletion_propagates
-echo "Running transaction rollback test (abort_source)..."
-uv run python -m unittest tests.test_pipeline.TestPocketPipeline.test_abort_source_discards_uncommitted_rows
-echo "Running run-stats / monitoring test..."
-uv run python -m unittest tests.test_pipeline.TestPocketPipeline.test_run_reports_stats
-echo "Running live-mode watch test..."
-uv run python -m unittest tests.test_pipeline.TestPocketPipeline.test_live_mode_picks_up_new_file
-echo "Running hybrid retrieval + REST API tests..."
-uv run python -m unittest tests.test_retrieval_api.TestRetrievalAndApi
-echo "Running text refiner unit tests..."
-uv run python -m unittest tests.test_retrieval_api.TestTextRefiner
-echo "Running code-aware splitting tests (POCKET-403)..."
-uv run python -m unittest tests.test_retrieval_api.TestCodeAwareSplitting
-echo "Running lifecycle command tests (POCKET-405)..."
-uv run python -m unittest tests.test_retrieval_api.TestLifecycleCommands
-echo "Running graph extraction / resolution ops tests (POCKET-404)..."
-uv run python -m unittest tests.test_retrieval_api.TestGraphExtraction
-echo "Running graph target tests (POCKET-404a)..."
-uv run python -m unittest tests.test_retrieval_api.TestGraphTarget
+
+echo "Running full test suite (pytest, offline MockEmbedder)..."
+uv run python -m pytest "$@"
 echo "All tests passed successfully!"

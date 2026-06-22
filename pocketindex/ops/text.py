@@ -15,6 +15,8 @@ engine's lineage/memoization layer keeps pointing at real source bytes.
 import re
 from typing import Dict, List, Optional, Tuple
 
+import numpy as np
+
 from pocketindex.resources.chunk import Chunk, Position
 
 # A contiguous text segment: (text, abs_start_offset, abs_end_offset). Segments
@@ -407,3 +409,172 @@ class RecursiveSplitter:
         if not segments:
             return []
         return _to_chunks(segments)
+
+
+# ---------------------------------------------------------------------------
+# Sentence-level helpers for SemanticSplitter
+# ---------------------------------------------------------------------------
+
+# Matches a sentence boundary: ends with . ! ? and the *next* token starts
+# with an uppercase letter or a digit. We also split on double-newlines
+# (paragraph boundaries) regardless of punctuation.
+_SENT_BOUNDARY = re.compile(r'(?<=[.!?])[ \t]+(?=[A-Z0-9])|\n{2,}')
+
+
+def _split_sentences(text: str) -> Tuple[List[str], List[Tuple[int, int]]]:
+    """Split *text* into sentence-like fragments and return ``(sentences, spans)``.
+
+    Each span is ``(char_start, char_end)`` into the *original* ``text`` so
+    ``SemanticSplitter`` can reconstruct exact source byte offsets.
+    """
+    if not text:
+        return [], []
+
+    # Collect split-point positions.
+    boundaries = [0]
+    for m in _SENT_BOUNDARY.finditer(text):
+        # Start the next sentence after the whitespace/newlines.
+        boundaries.append(m.end())
+    boundaries.append(len(text))
+
+    sentences: List[str] = []
+    spans: List[Tuple[int, int]] = []
+    for i in range(len(boundaries) - 1):
+        start = boundaries[i]
+        end = boundaries[i + 1]
+        s = text[start:end]
+        if s.strip():  # skip blank-only fragments
+            sentences.append(s)
+            spans.append((start, end))
+    return sentences, spans
+
+
+# ---------------------------------------------------------------------------
+# SemanticSplitter
+# ---------------------------------------------------------------------------
+
+class SemanticSplitter:
+    """Chunk text at semantic boundaries guided by embedding similarity.
+
+    Embeds every sentence with a sentence-transformers model, finds consecutive
+    pairs whose cosine similarity drops below *breakpoint_threshold*, and starts
+    a new chunk there.  Small fragments are merged up to *min_chunk_size*;
+    oversized groups are sub-split by the :class:`RecursiveSplitter` fallback.
+
+    Requires a sentence-transformers model with a synchronous ``encode()``
+    method (``SentenceTransformer`` or any object that satisfies the same
+    interface).  Falls back to :class:`RecursiveSplitter` when *model* is
+    ``None``, when there is only one sentence, or when batch encoding fails.
+
+    Example usage inside the pipeline::
+
+        splitter = SemanticSplitter(
+            model=embedder.model,
+            breakpoint_threshold=config.POCKET_SEMANTIC_SPLIT_THRESHOLD,
+        )
+        chunks = splitter.split(text, language=language)
+    """
+
+    def __init__(
+        self,
+        model=None,
+        *,
+        breakpoint_threshold: float = 0.7,
+        min_chunk_size: int = 200,
+        max_chunk_size: int = 2000,
+    ):
+        self._model = model
+        self._threshold = breakpoint_threshold
+        self._min_size = min_chunk_size
+        self._max_size = max_chunk_size
+        self._fallback = RecursiveSplitter()
+
+    # ------------------------------------------------------------------
+    # Public API (same contract as RecursiveSplitter.split)
+    # ------------------------------------------------------------------
+
+    def split(
+        self,
+        text: str,
+        *,
+        language: Optional[str] = None,
+    ) -> List[Chunk]:
+        """Return semantic chunks; each carries exact source byte offsets."""
+        if not text:
+            return []
+        if self._model is None:
+            return self._fallback.split(
+                text, chunk_size=1000, chunk_overlap=200, language=language
+            )
+
+        sentences, spans = _split_sentences(text)
+        if len(sentences) <= 1:
+            return self._fallback.split(
+                text, chunk_size=1000, chunk_overlap=200, language=language
+            )
+
+        # Batch-encode all sentences in a single call (far cheaper than N
+        # individual forward passes on the same model).
+        try:
+            embeddings = self._model.encode(sentences, normalize_embeddings=True)
+        except Exception:
+            return self._fallback.split(
+                text, chunk_size=1000, chunk_overlap=200, language=language
+            )
+
+        # Compute consecutive cosine similarities.
+        # Embeddings are already L2-normalised so dot product == cosine.
+        sims: List[float] = []
+        for i in range(len(embeddings) - 1):
+            a = np.asarray(embeddings[i], dtype=np.float32)
+            b = np.asarray(embeddings[i + 1], dtype=np.float32)
+            na, nb = float(np.linalg.norm(a)), float(np.linalg.norm(b))
+            if na < 1e-9 or nb < 1e-9:
+                # Zero-vectors (e.g. from MockEmbedder) — treat as same topic.
+                sims.append(1.0)
+            else:
+                sims.append(float(np.dot(a / na, b / nb)))
+
+        # Sentence indices where a new chunk starts.
+        chunk_starts: List[int] = [0]
+        for i, sim in enumerate(sims):
+            if sim < self._threshold:
+                chunk_starts.append(i + 1)
+
+        # Build char-level (start, end) pairs for each group.
+        raw: List[Tuple[int, int]] = []
+        for g, sent_start in enumerate(chunk_starts):
+            sent_end = chunk_starts[g + 1] if g + 1 < len(chunk_starts) else len(sentences)
+            if sent_start >= sent_end:
+                continue
+            raw.append((spans[sent_start][0], spans[sent_end - 1][1]))
+
+        # Merge tiny groups; sub-split oversized ones.
+        merged: List[Tuple[int, int]] = []
+        for gstart, gend in raw:
+            size = gend - gstart
+            if merged and (merged[-1][1] - merged[-1][0] + size) <= self._min_size:
+                prev_start, _ = merged.pop()
+                merged.append((prev_start, gend))
+            elif size > self._max_size:
+                sub = self._fallback.split(
+                    text[gstart:gend], chunk_size=1000, chunk_overlap=200
+                )
+                for sc in sub:
+                    merged.append((gstart + sc.start.char_offset, gstart + sc.end.char_offset))
+            else:
+                merged.append((gstart, gend))
+
+        if not merged:
+            return self._fallback.split(
+                text, chunk_size=1000, chunk_overlap=200, language=language
+            )
+
+        return [
+            Chunk(
+                text=text[s:e],
+                start=Position(char_offset=s),
+                end=Position(char_offset=e),
+            )
+            for s, e in merged
+        ]

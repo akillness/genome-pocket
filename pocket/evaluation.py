@@ -26,13 +26,15 @@ exact code path real queries take — it can never drift from production retriev
 """
 from __future__ import annotations
 
+import itertools
 import json
 import os
 import re
 import sqlite3
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
+
 
 import pocket.config as config
 from pocket import retrieval
@@ -318,6 +320,9 @@ def evaluate(
     db_path: Optional[Path] = None,
     k: int = 5,
     model_name: Optional[str] = None,
+    weights: Optional[Dict[str, float]] = None,
+    use_mmr: Optional[bool] = None,
+    mmr_lambda: Optional[float] = None,
 ) -> EvalMetrics:
     """Run every case through real retrieval and aggregate the scores.
 
@@ -325,6 +330,16 @@ def evaluate(
     top-``k`` results are scored against its relevant files, and the per-case
     scores are averaged into an :class:`EvalMetrics`. The individual
     :class:`CaseResult` rows are retained on ``.cases`` for drill-down.
+
+    ``weights`` is passed straight to :func:`retrieval.search` so the harness
+    can score a candidate set of fusion weights (POCKET-502); ``None`` uses the
+    configured defaults.
+
+    ``use_mmr``/``mmr_lambda`` are likewise forwarded so the harness can
+    measure the MMR diversity trade-off (POCKET-501) — i.e. score the same gold
+    cases with and without Maximal Marginal Relevance re-ranking and read the
+    Recall@k/MAP delta — instead of only toggling it through global config.
+    ``None`` (the default) follows ``config.POCKET_MMR`` / ``POCKET_MMR_LAMBDA``.
     """
     db_path = Path(db_path or config.POCKET_SQLITE_DB)
     results: List[CaseResult] = []
@@ -335,7 +350,12 @@ def evaluate(
             db_path=db_path,
             model_name=model_name,
             mode=case.mode,
+            weights=weights,
+            use_mmr=use_mmr,
+            mmr_lambda=mmr_lambda,
         )
+
+
         retrieved_files = [h.file_path for h in hits]
         rr = reciprocal_rank(retrieved_files, case.relevant_files)
         results.append(
@@ -435,4 +455,298 @@ def format_report(metrics: EvalMetrics, show_cases: bool = False) -> str:
                 f"  [{mark}] rr={r.reciprocal_rank:.3f} "
                 f"q={r.query!r} -> {os.path.basename(top)}"
             )
+    return "\n".join(lines)
+
+
+# --- Weighted-RRF tuning (POCKET-502) --------------------------------------
+
+# Default candidate weights to grid-search per strategy. 0.0 lets the optimizer
+# drop a strategy entirely; 1.0 (always probed) reproduces plain RRF, so the
+# baseline is always inside the grid and the tuner can never pick something
+# worse than the equal-weight default.
+DEFAULT_WEIGHT_GRID = (0.0, 0.5, 1.0, 2.0)
+
+_STRATEGY_ORDER = ("vector", "lexical", "graph")
+_EQUAL_WEIGHTS = {s: 1.0 for s in _STRATEGY_ORDER}
+
+
+@dataclass
+class WeightTrial:
+    """One evaluated point in the weight grid: its weights and target score."""
+
+    weights: Dict[str, float]
+    score: float
+
+
+@dataclass
+class TuningResult:
+    """Outcome of a weighted-RRF grid search (POCKET-502)."""
+
+    metric: str
+    baseline_weights: Dict[str, float]
+    baseline_score: float
+    best_weights: Dict[str, float]
+    best_score: float
+    tuned_strategies: List[str]
+    trials: List[WeightTrial] = field(default_factory=list)
+
+    @property
+    def improved(self) -> bool:
+        """Whether the best point beats the equal-weight baseline."""
+        return self.best_score > self.baseline_score
+
+    @property
+    def delta(self) -> float:
+        return self.best_score - self.baseline_score
+
+    def to_dict(self, include_trials: bool = False) -> Dict:
+        d = asdict(self)
+        d["improved"] = self.improved
+        d["delta"] = self.delta
+        if not include_trials:
+            d.pop("trials")
+        return d
+
+
+def _deviation(weights: Dict[str, float]) -> float:
+    """Total distance from the equal-weight baseline (tie-breaker, lower wins)."""
+    return sum(abs(weights[s] - 1.0) for s in _STRATEGY_ORDER)
+
+
+def tune_weights(
+    cases: List[EvalCase],
+    db_path: Optional[Path] = None,
+    k: int = 5,
+    model_name: Optional[str] = None,
+    values=DEFAULT_WEIGHT_GRID,
+    metric: str = "mean_average_precision",
+) -> TuningResult:
+    """Grid-search per-strategy RRF weights, returning the best (POCKET-502).
+
+    Turns the eval harness from a guard into an optimizer: every weight
+    combination is scored with the *same* real retrieval path :func:`evaluate`
+    uses, and the combination maximising ``metric`` is returned alongside the
+    equal-weight baseline so the caller can see the lift before persisting it.
+
+    Only strategies actually exercised by the cases' modes are varied (others
+    are pinned to 1.0), so a lexical-only suite searches a 1-D grid instead of a
+    wasteful 3-D one. ``1.0`` is always probed, so the result is never worse than
+    plain RRF. Ties are broken toward the baseline (smallest weight deviation),
+    keeping the recommendation conservative.
+    """
+    if metric not in METRIC_NAMES:
+        raise ValueError(
+            f"metric must be one of {METRIC_NAMES}, got {metric!r}"
+        )
+
+    # Clean the grid: clamp to non-negative, dedupe (order-preserving), and
+    # guarantee 1.0 is present so the baseline point exists.
+    vals: List[float] = []
+    for v in values:
+        fv = max(float(v), 0.0)
+        if fv not in vals:
+            vals.append(fv)
+    if 1.0 not in vals:
+        vals.append(1.0)
+
+    # Which strategies are worth varying for this case set?
+    tuned = [
+        s
+        for s in _STRATEGY_ORDER
+        if any(s in retrieval._MODE_STRATEGIES.get(c.mode, ()) for c in cases)
+    ]
+
+    baseline_score = getattr(
+        evaluate(cases, db_path=db_path, k=k, model_name=model_name,
+                 weights=dict(_EQUAL_WEIGHTS)),
+        metric,
+    )
+
+    trials: List[WeightTrial] = []
+    best_weights = dict(_EQUAL_WEIGHTS)
+    best_score = baseline_score
+    best_dev = 0.0
+    for combo in itertools.product(vals, repeat=len(tuned)):
+        weights = dict(_EQUAL_WEIGHTS)
+        weights.update(dict(zip(tuned, combo)))
+        if weights == _EQUAL_WEIGHTS:
+            score = baseline_score  # already measured; don't pay for it twice
+        else:
+            score = getattr(
+                evaluate(cases, db_path=db_path, k=k, model_name=model_name,
+                         weights=weights),
+                metric,
+            )
+        trials.append(WeightTrial(weights=dict(weights), score=score))
+        dev = _deviation(weights)
+        if score > best_score or (score == best_score and dev < best_dev):
+            best_score, best_weights, best_dev = score, dict(weights), dev
+
+    return TuningResult(
+        metric=metric,
+        baseline_weights=dict(_EQUAL_WEIGHTS),
+        baseline_score=baseline_score,
+        best_weights=best_weights,
+        best_score=best_score,
+        tuned_strategies=tuned,
+        trials=trials,
+    )
+
+
+def save_weights(path: Path, weights: Dict[str, float]) -> None:
+    """Persist tuned fusion weights as JSON for ``POCKET_RRF_WEIGHTS_FILE``."""
+    out = {s: float(weights[s]) for s in _STRATEGY_ORDER if s in weights}
+    Path(path).write_text(json.dumps(out, indent=2, sort_keys=True))
+
+
+def load_weights(path: Path) -> Dict[str, float]:
+    """Load fusion weights previously written by :func:`save_weights`."""
+    data = json.loads(Path(path).read_text())
+    if not isinstance(data, dict):
+        raise ValueError("weights file must be a JSON object")
+    return {s: float(data[s]) for s in _STRATEGY_ORDER if s in data}
+
+
+# ---------------------------------------------------------------------------
+# RAGAS-style LLM-as-judge evaluation (POCKET-601)
+# ---------------------------------------------------------------------------
+
+@dataclass
+class JudgeMetrics:
+    """Aggregate metrics from a retrieval evaluation run with an LLM judge.
+
+    Wraps the standard :class:`EvalMetrics` and adds ``mean_context_relevance``:
+    the average score (0–1) assigned by a local Ollama model when asked how
+    relevant each retrieved chunk is to its query.  Higher is better.
+    """
+
+    base: EvalMetrics
+    mean_context_relevance: float  # mean over all cases of per-chunk relevance
+    n_judged: int                  # number of cases for which judge ran
+    judge_model: str               # Ollama model used as judge
+
+    def to_dict(self) -> Dict:
+        d = self.base.to_dict(include_cases=False)
+        d.update(
+            {
+                "mean_context_relevance": self.mean_context_relevance,
+                "n_judged": self.n_judged,
+                "judge_model": self.judge_model,
+            }
+        )
+        return d
+
+
+def _ollama_relevance_score(
+    query: str,
+    context: str,
+    host: str,
+    model: str,
+) -> float:
+    """Ask a local Ollama model how relevant *context* is to *query* (0–1).
+
+    The score is used as a proxy for RAGAS Context Relevance — a fraction of
+    retrieved sentences that are actually needed to answer the question.  A
+    local judge avoids cloud dependencies while still providing a signal beyond
+    keyword overlap.  Returns 0.5 (neutral) on any Ollama error so a failed
+    daemon doesn't invalidate the whole eval run.
+    """
+    import urllib.error
+    import urllib.request
+
+    prompt = (
+        f"Query: {query}\n\nPassage:\n{context[:800]}\n\n"
+        "Rate how relevant this passage is to the query on a scale from "
+        "0.0 (completely irrelevant) to 1.0 (perfectly relevant). "
+        "Reply with a single decimal number only, nothing else."
+    )
+    payload = json.dumps(
+        {"model": model, "prompt": prompt, "stream": False}
+    ).encode("utf-8")
+    req = urllib.request.Request(
+        f"{host.rstrip('/')}/api/generate",
+        data=payload,
+        headers={"Content-Type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=30.0) as resp:
+            body = json.loads(resp.read().decode("utf-8"))
+        raw = body.get("response", "").strip()
+        m = re.search(r"-?\d+\.?\d*", raw)
+        val = float(m.group()) if m else 0.5
+        return min(max(val, 0.0), 1.0)
+    except Exception:  # noqa: BLE001 — any Ollama failure → neutral score
+        return 0.5
+
+
+def evaluate_with_judge(
+    cases: List["EvalCase"],
+    k: int = 5,
+    db_path: Optional[Path] = None,
+    ollama_host: Optional[str] = None,
+    ollama_model: Optional[str] = None,
+) -> JudgeMetrics:
+    """Evaluate retrieval with standard IR metrics **plus** an Ollama LLM judge.
+
+    Runs :func:`evaluate` for the standard IR metrics (Hit@k, MRR, …) and then
+    makes one additional Ollama call per retrieved chunk to score its relevance
+    to the query (0–1).  The mean over all cases is reported as
+    ``mean_context_relevance`` in the returned :class:`JudgeMetrics`.
+
+    Requires a running Ollama daemon; if unavailable, judge scores default to
+    0.5 (neutral) so the standard IR metrics are still reported correctly.
+
+    Parameters
+    ----------
+    cases:
+        Evaluation cases — same as :func:`evaluate`.
+    k:
+        Rank cutoff for both standard metrics and the judge pass.
+    db_path:
+        SQLite database path; defaults to ``config.POCKET_SQLITE_DB``.
+    ollama_host:
+        Ollama daemon base URL; defaults to ``config.POCKET_HYDE_OLLAMA_HOST``
+        (both share the same OLLAMA_HOST env-var).
+    ollama_model:
+        Ollama model to use as judge; defaults to ``config.POCKET_HYDE_OLLAMA_MODEL``.
+    """
+    base = evaluate(cases, k=k, db_path=db_path)
+    host = ollama_host or config.POCKET_HYDE_OLLAMA_HOST
+    model = ollama_model or config.POCKET_HYDE_OLLAMA_MODEL
+
+    relevance_scores: List[float] = []
+    n_judged = 0
+
+    for case in cases:
+        hits = retrieval.search(case.query, limit=k, mode=case.mode, db_path=db_path)
+        if not hits:
+            continue
+        chunk_scores = [
+            _ollama_relevance_score(case.query, h.text, host, model)
+            for h in hits
+        ]
+        relevance_scores.append(sum(chunk_scores) / len(chunk_scores))
+        n_judged += 1
+
+    mean_rel = (
+        sum(relevance_scores) / len(relevance_scores) if relevance_scores else 0.0
+    )
+    return JudgeMetrics(
+        base=base,
+        mean_context_relevance=mean_rel,
+        n_judged=n_judged,
+        judge_model=model,
+    )
+
+
+def format_judge_report(metrics: JudgeMetrics) -> str:
+    """Render a :class:`JudgeMetrics` result as human-readable text."""
+    lines = [
+        format_report(metrics.base),
+        "",
+        f"LLM-as-judge context relevance (model: {metrics.judge_model})",
+        "-" * 48,
+        f"  Mean context relevance: {metrics.mean_context_relevance:.4f}  "
+        f"(over {metrics.n_judged} case(s))",
+    ]
     return "\n".join(lines)

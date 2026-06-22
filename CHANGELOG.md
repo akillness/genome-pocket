@@ -12,6 +12,75 @@ by installing it in an isolated venv and diffing its public API against the
 vendored `pocketindex` engine.
 
 ### Added
+- **Weighted / tunable Reciprocal Rank Fusion (POCKET-502).** RRF used to fuse
+  every strategy with equal weight; `_fold_ranked`/`_fuse`/`_fuse_ranked`/`search`
+  now take per-strategy `weights` (`{vector, lexical, graph}`) so each strategy's
+  reciprocal-rank contribution can be scaled (`weight·1/(RRF_K+rank)`). Defaults
+  are 1.0 each (`config.POCKET_RRF_WEIGHTS`, from `POCKET_RRF_{VECTOR,LEXICAL,GRAPH}_WEIGHT`),
+  so behaviour is identical to plain RRF until tuned; negative weights clamp to 0
+  (disable, never invert). The eval harness becomes an **optimizer**:
+  `evaluation.tune_weights` grid-searches the weights against real retrieval
+  (`pocket eval --tune [--tune-metric M] [--save-weights FILE]`), varying only the
+  strategies the cases' modes exercise, always probing 1.0 so it can never land
+  below the equal-weight baseline, and breaking ties toward the baseline. The
+  winner is persisted via `save_weights`/`load_weights`; pointing
+  `POCKET_RRF_WEIGHTS_FILE` at that file feeds it back into `config` (overriding
+  the env defaults), closing the tune→apply loop for search and eval alike.
+  Tests: weight-resolution defaults/merge/clamp, equal-weight == plain RRF,
+  up-weighting flips a fusion tie, zero weight disables without dropping the
+  chunk, env + file config resolution, the tuner never-worse-than-baseline +
+  persistence, unknown-metric guard, and the `--tune` CLI path (9).
+
+- **Result diversity via MMR fusion re-ranking (POCKET-501).** `pocket.retrieval`
+  can now re-rank the fused candidate pool with Maximal Marginal Relevance so
+  near-duplicate chunks (e.g. several from the same file) stop crowding the
+  top-k. Fusion was split into `_fuse_ranked` (full `(chunk_id, hit)` pool) and
+  `_fuse` (the existing top-k); when MMR is on, `search()` pulls each candidate's
+  stored float32 embedding (`_fetch_embeddings`) and picks greedily by
+  `λ·relevance − (1−λ)·max-cosine-to-selected` (`_mmr_rerank`/`_cosine`). Off by
+  default — the deterministic RRF order is unchanged unless opted in via
+  `POCKET_MMR`/`POCKET_MMR_LAMBDA` (env) or `pocket search --mmr/--no-mmr`
+  (per-query). Degrades safely: missing/zero embeddings count as non-redundant,
+  so the relevance order is preserved. Tests: cosine signal + degenerate inputs,
+  λ=1 reproduces relevance order, low λ promotes a diverse candidate over a
+  near-duplicate, limit/empty handling, the end-to-end MMR search path, and the
+  config-default routing (6).
+- **Agent-native `pocket search --json`.** The CLI now mirrors the REST
+  `/search` and MCP `search_knowledge` surfaces: with `--json` it emits
+  `{query, mode, count, hits[]}` (each hit carrying full
+  `file_path`/`text`/`start_offset`/`end_offset`/`score` lineage) as pure JSON on
+  stdout, while status and "run update first" diagnostics go to stderr, so a
+  calling agent or pipeline can parse `pocket search` output deterministically.
+  Tests: JSON payload shape + lineage keys on a real lexical hit, and the
+  empty-index path emitting `[]` on stdout with the hint on stderr (2).
+
+### Fixed
+- **Test runner was broken and bypassed the offline mock.** `run_tests.sh`
+  invoked `tests.test_retrieval_api.TestGraphExtraction` (the class actually
+  lives in `tests/test_graph_unit.py`), so the script errored partway through,
+  and it drove tests via `python -m unittest`, which does not load the
+  session-scoped `MockEmbedder` fixture in `tests/conftest.py` — silently loading
+  real model weights and skipping whole modules (`test_graph_unit`,
+  `test_multimodal`, `TestRetrievalEvaluation`). Rewrote it to drive pytest,
+  which auto-discovers every module, honors the offline mock, and runs all 91
+  tests in ~5 s. Updated the stale "81 tests" count in the README.
+
+### Docs
+- **Review & improvement backlog (spec-stack Write layer).** Added
+  `docs/planning/review-2026-improvements.md`: a grounded review of the current
+  codebase plus a prioritized, feature-oriented backlog (MMR fusion, weighted
+  RRF, query expansion, semantic routing, HITL in the Web UI, citation
+  synthesis) with concrete code seams for the next loop.
+- **Product strategy & discovery doc (PM frameworks).** Added
+  `docs/planning/pm-product-strategy-2026.md`: positioning, Jobs-to-be-Done,
+  personas, a North Star + input-metric set, a Teresa Torres Opportunity
+  Solution Tree mapping the engineering backlog to outcomes, a lightweight PRD
+  for cited-answer synthesis (POCKET-506), and pretotyping/riskiest-assumption
+  tests to validate before building. Also corrected a stale "89 tests" count in
+  the README roadmap (suite is now 91).
+
+
+### Added
 - **Automated retrieval evaluation & regression guard (POCKET-303).** New
 
   `pocket/evaluation.py` plus a `pocket eval` command turn retrieval quality into

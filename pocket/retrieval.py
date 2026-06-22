@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 import sqlite_vec
+import numpy as np
 
 import pocket.config as config
 
@@ -45,6 +46,8 @@ class RetrievalHit:
     vector_rank: Optional[int] = None
     lexical_rank: Optional[int] = None
     graph_rank: Optional[int] = None
+    # Set by _rerank() when the cross-encoder reranker is active (POCKET_RERANKER=1).
+    reranker_rank: Optional[int] = None
 
     def to_dict(self) -> Dict:
         return asdict(self)
@@ -161,6 +164,7 @@ def _gather(
     mode: str,
     fetch_n: int,
     model_name: str,
+    hyde_query: Optional[str] = None,
 ) -> tuple:
     """Run each enabled retrieval strategy and return their raw ranked rows.
 
@@ -174,10 +178,15 @@ def _gather(
     graph_rows: List[tuple] = []
 
     # Both vector search and graph entity-anchoring need the query embedding.
+    # When HyDE is active the caller passes a hypothetical document as
+    # ``hyde_query``; we embed that instead of the raw query for vector/graph
+    # so the query vector lands closer to real document chunks in index space.
+    # Lexical (BM25) search always uses the original ``query`` keyword string.
     query_vector = None
     if mode in ("hybrid", "vector", "graph"):
         model = _get_model(model_name)
-        query_embedding = _encode_query(model, query)
+        vector_text = hyde_query if hyde_query else query
+        query_embedding = _encode_query(model, vector_text)
         query_vector = sqlite_vec.serialize_float32(query_embedding)
 
 
@@ -198,6 +207,11 @@ def search(
     db_path: Optional[Path] = None,
     model_name: Optional[str] = None,
     mode: str = "hybrid",
+    use_mmr: Optional[bool] = None,
+    mmr_lambda: Optional[float] = None,
+    weights: Optional[Dict[str, float]] = None,
+    use_reranker: Optional[bool] = None,
+    use_hyde: Optional[bool] = None,
 ) -> List[RetrievalHit]:
     """Run retrieval and return ranked, lineage-tagged hits.
 
@@ -206,25 +220,139 @@ def search(
     ``"graph"`` (GraphRAG: entity-anchored multi-hop traversal). The graph
     strategy only participates when an ``entities`` table is present, so
     ``"hybrid"`` stays backward compatible on graph-less databases.
+
+    ``weights`` scales each strategy's RRF contribution (POCKET-502); ``None``
+    uses ``config.POCKET_RRF_WEIGHTS`` (1.0 each == plain unweighted RRF).
+
+    When ``use_mmr`` is true (defaults to ``config.POCKET_MMR``) the fused
+    candidates are re-ranked with Maximal Marginal Relevance so near-duplicate
+    chunks don't crowd the top-k; ``mmr_lambda`` (defaults to
+    ``config.POCKET_MMR_LAMBDA``) trades relevance (1.0) against diversity (0.0).
+
+    When ``use_hyde`` is true (defaults to ``config.POCKET_HYDE``) the query is
+    first expanded by a local Ollama model into a hypothetical answer passage
+    which is used for vector/graph embedding instead of the raw query string.
+    Lexical (BM25) search is always run on the original query.
+
+    When ``use_reranker`` is true (defaults to ``config.POCKET_RERANKER``) the
+    top ``POCKET_RERANKER_TOP_N`` fused candidates are re-scored by a
+    cross-encoder model, raising precision before the final top-``limit`` cut.
     """
     db_path = db_path or config.POCKET_SQLITE_DB
     model_name = model_name or config.EMBEDDING_MODEL
+    if use_mmr is None:
+        use_mmr = config.POCKET_MMR
+    if mmr_lambda is None:
+        mmr_lambda = config.POCKET_MMR_LAMBDA
+    if use_reranker is None:
+        use_reranker = config.POCKET_RERANKER
+    if use_hyde is None:
+        use_hyde = config.POCKET_HYDE
     if not Path(db_path).exists():
         return []
 
-    # Over-fetch from each strategy so fusion has enough candidates to reorder.
-    fetch_n = max(limit * 4, limit)
+    # HyDE: expand the query into a hypothetical passage for vector/graph encoding.
+    # Lexical (BM25) always uses the original query keywords.
+    hyde_query: Optional[str] = None
+    if use_hyde:
+        hyde_query = _hyde_expand(
+            query,
+            ollama_model=config.POCKET_HYDE_OLLAMA_MODEL,
+            ollama_host=config.POCKET_HYDE_OLLAMA_HOST,
+        )
+
+    # When the reranker is active, gather a larger candidate pool first so the
+    # cross-encoder has enough material to reorder before the final top-k cut.
+    pre_limit = config.POCKET_RERANKER_TOP_N if use_reranker else limit
+    fetch_n = max(pre_limit * 4, pre_limit)
 
     conn = _connect(Path(db_path))
     try:
         vector_rows, lexical_rows, graph_rows = _gather(
-            conn, query, mode, fetch_n, model_name
+            conn, query, mode, fetch_n, model_name, hyde_query=hyde_query
         )
 
+        if use_mmr:
+            # MMR needs embeddings fetched while the connection is open.
+            candidates = _fuse_ranked(vector_rows, lexical_rows, graph_rows, weights)
+            embeddings = _fetch_embeddings(conn, [cid for cid, _ in candidates])
+        else:
+            pre_hits = _fuse(vector_rows, lexical_rows, pre_limit, graph_rows, weights)
     finally:
         conn.close()
 
-    return _fuse(vector_rows, lexical_rows, limit, graph_rows)
+    if use_mmr:
+        paired = [(hit, embeddings.get(cid)) for cid, hit in candidates]
+        pre_hits = _mmr_rerank(paired, mmr_lambda, pre_limit)
+
+    if use_reranker:
+        pre_hits = _rerank(query, pre_hits, config.POCKET_RERANKER_MODEL)
+
+    return pre_hits[:limit]
+
+
+
+def _resolve_weights(weights: Optional[Dict[str, float]]) -> Dict[str, float]:
+    """Merge caller weights over the configured defaults (POCKET-502).
+
+    Returns a full ``{vector, lexical, graph}`` map: any strategy the caller
+    omits falls back to ``config.POCKET_RRF_WEIGHTS`` (itself defaulting to 1.0
+    each == plain unweighted RRF). Negative weights are clamped to 0 so a
+    strategy can be disabled but never invert a chunk's score.
+    """
+    resolved = dict(config.POCKET_RRF_WEIGHTS)
+    if weights:
+        for name in ("vector", "lexical", "graph"):
+            if name in weights:
+                resolved[name] = max(float(weights[name]), 0.0)
+    return resolved
+
+
+def _fold_ranked(
+    accum: Dict[int, RetrievalHit],
+    rows: List[tuple],
+    rank_attr: str,
+    weight: float = 1.0,
+) -> None:
+    """Fold one strategy's ranked rows into the shared RRF accumulator.
+
+    Each row contributes ``weight * 1/(RRF_K + rank)`` to its chunk's fused
+    score (weighted Reciprocal Rank Fusion, POCKET-502) and records its 1-based
+    position in ``rank_attr`` (``"vector_rank"`` / ``"lexical_rank"`` /
+    ``"graph_rank"``). A chunk surfaced by several strategies is keyed by its
+    chunk id, so the contributions land on the same :class:`RetrievalHit` and
+    sum. ``weight`` defaults to 1.0, reproducing plain RRF.
+    """
+    for rank, row in enumerate(rows, start=1):
+        chunk_id, file_path, text, start, end, _score = row
+        hit = accum.get(chunk_id)
+        if hit is None:
+            hit = RetrievalHit(file_path, text, start, end, score=0.0)
+            accum[chunk_id] = hit
+        setattr(hit, rank_attr, rank)
+        hit.score += weight * (1.0 / (RRF_K + rank))
+
+
+def _fuse_ranked(
+    vector_rows: List[tuple],
+    lexical_rows: List[tuple],
+    graph_rows: Optional[List[tuple]] = None,
+    weights: Optional[Dict[str, float]] = None,
+) -> List[tuple]:
+    """Fuse the strategies with weighted RRF and return ``(chunk_id, hit)`` pairs.
+
+    Sorted by fused score (descending) but *not* truncated, so callers that need
+    the full candidate pool keyed by chunk id (e.g. MMR re-ranking, which must
+    join each candidate back to its embedding) get everything fusion saw.
+    ``weights`` scales each strategy's contribution (POCKET-502); ``None`` uses
+    the configured defaults (1.0 each == plain RRF).
+    """
+    w = _resolve_weights(weights)
+    accum: Dict[int, RetrievalHit] = {}
+    _fold_ranked(accum, vector_rows, "vector_rank", w["vector"])
+    _fold_ranked(accum, lexical_rows, "lexical_rank", w["lexical"])
+    _fold_ranked(accum, graph_rows or [], "graph_rank", w["graph"])
+    return sorted(accum.items(), key=lambda kv: kv[1].score, reverse=True)
 
 
 def _fuse(
@@ -232,44 +360,196 @@ def _fuse(
     lexical_rows: List[tuple],
     limit: int,
     graph_rows: Optional[List[tuple]] = None,
+    weights: Optional[Dict[str, float]] = None,
 ) -> List[RetrievalHit]:
-    """Combine vector, lexical, and graph results with Reciprocal Rank Fusion.
+    """Combine vector, lexical, and graph results with weighted Reciprocal Rank
+    Fusion.
 
     Rows are keyed by chunk id so the same chunk found by several strategies has
     its reciprocal-rank contributions summed. ``graph_rows`` is the optional
     third (GraphRAG) list; passing it preserves the original two-list signature.
+    ``weights`` (POCKET-502) scales each strategy; ``None`` keeps plain RRF.
     """
-    accum: Dict[int, RetrievalHit] = {}
+    ranked = _fuse_ranked(vector_rows, lexical_rows, graph_rows, weights)
+    return [hit for _cid, hit in ranked[:limit]]
 
-    for rank, row in enumerate(vector_rows, start=1):
-        chunk_id, file_path, text, start, end, _distance = row
-        hit = accum.get(chunk_id)
-        if hit is None:
-            hit = RetrievalHit(file_path, text, start, end, score=0.0)
-            accum[chunk_id] = hit
-        hit.vector_rank = rank
-        hit.score += 1.0 / (RRF_K + rank)
 
-    for rank, row in enumerate(lexical_rows, start=1):
-        chunk_id, file_path, text, start, end, _bm25 = row
-        hit = accum.get(chunk_id)
-        if hit is None:
-            hit = RetrievalHit(file_path, text, start, end, score=0.0)
-            accum[chunk_id] = hit
-        hit.lexical_rank = rank
-        hit.score += 1.0 / (RRF_K + rank)
 
-    for rank, row in enumerate(graph_rows or [], start=1):
-        chunk_id, file_path, text, start, end, _g = row
-        hit = accum.get(chunk_id)
-        if hit is None:
-            hit = RetrievalHit(file_path, text, start, end, score=0.0)
-            accum[chunk_id] = hit
-        hit.graph_rank = rank
-        hit.score += 1.0 / (RRF_K + rank)
+def _fetch_embeddings(
+    conn: sqlite3.Connection, chunk_ids: List[int]
+) -> Dict[int, "np.ndarray"]:
+    """Load the stored float32 embedding for each chunk id (for MMR).
 
-    ranked = sorted(accum.values(), key=lambda h: h.score, reverse=True)
-    return ranked[:limit]
+    Embeddings are persisted as sqlite-vec ``serialize_float32`` blobs (raw
+    little-endian float32), so ``np.frombuffer`` recovers the vector without a
+    re-encode. Missing/NULL rows are simply omitted.
+    """
+    if not chunk_ids:
+        return {}
+    placeholders = ",".join("?" * len(chunk_ids))
+    cur = conn.execute(
+        f"SELECT id, embedding FROM embeddings WHERE id IN ({placeholders})",
+        tuple(chunk_ids),
+    )
+    out: Dict[int, "np.ndarray"] = {}
+    for cid, blob in cur.fetchall():
+        if blob is None:
+            continue
+        out[cid] = np.frombuffer(blob, dtype=np.float32)
+    return out
+
+
+def _cosine(a: Optional["np.ndarray"], b: Optional["np.ndarray"]) -> float:
+    """Cosine similarity, defined as 0 when either vector is missing or zero.
+
+    Returning 0 for degenerate inputs means MMR treats unmeasurable pairs as
+    non-redundant and falls back toward the relevance order rather than erroring.
+    """
+    if a is None or b is None:
+        return 0.0
+    na = float(np.linalg.norm(a))
+    nb = float(np.linalg.norm(b))
+    if na == 0.0 or nb == 0.0:
+        return 0.0
+    return float(np.dot(a, b) / (na * nb))
+
+
+def _mmr_rerank(
+    candidates: List[tuple],
+    mmr_lambda: float,
+    limit: int,
+) -> List[RetrievalHit]:
+    """Re-rank fused candidates with Maximal Marginal Relevance.
+
+    ``candidates`` is ``[(RetrievalHit, embedding_or_None), ...]`` pre-sorted by
+    fused (RRF) relevance. Each pick maximises
+    ``λ·rel(d) − (1−λ)·max_{s∈selected} cos(d, s)``: relevance is the fused score
+    (normalised to the top candidate), redundancy is the highest cosine to an
+    already-selected chunk. ``λ=1`` reproduces the plain relevance order; lower λ
+    pushes diverse chunks up. Stable: ties keep the incoming (relevance) order.
+    """
+    mmr_lambda = min(max(mmr_lambda, 0.0), 1.0)
+    if not candidates:
+        return []
+    max_score = max((hit.score for hit, _ in candidates), default=0.0) or 1.0
+
+    remaining = list(candidates)
+    selected: List[tuple] = []
+    while remaining and len(selected) < limit:
+        best_i = 0
+        best_val = None
+        for i, (hit, emb) in enumerate(remaining):
+            rel = hit.score / max_score
+            redundancy = max(
+                (_cosine(emb, semb) for _, semb in selected), default=0.0
+            )
+            val = mmr_lambda * rel - (1.0 - mmr_lambda) * redundancy
+            if best_val is None or val > best_val:
+                best_val = val
+                best_i = i
+        selected.append(remaining.pop(best_i))
+    return [hit for hit, _ in selected]
+
+
+# ---------------------------------------------------------------------------
+# HyDE — Hypothetical Document Embeddings (arXiv:2212.10496)
+# ---------------------------------------------------------------------------
+
+def _hyde_expand(query: str, *, ollama_model: str, ollama_host: str) -> str:
+    """Generate a hypothetical passage for vector-query encoding (HyDE).
+
+    Sends the query to a local Ollama model, asks it to write a short passage
+    that would directly answer the question, then returns that passage.  The
+    caller embeds the passage instead of the bare query so the query vector
+    lands in the same region of the index as real document chunks — bridging
+    the asymmetric short-query / long-document semantic gap.
+
+    Falls back to the original ``query`` string when Ollama is unavailable so
+    the search path degrades silently with no exception.
+    """
+    import urllib.error
+    import urllib.request
+
+    prompt = (
+        "Write a short, dense passage (2–4 sentences) that directly answers "
+        "the following question. Write only the passage, no preamble:\n\n"
+        f"{query}"
+    )
+    payload = json.dumps(
+        {"model": ollama_model, "prompt": prompt, "stream": False}
+    ).encode("utf-8")
+    req = urllib.request.Request(
+        f"{ollama_host.rstrip('/')}/api/generate",
+        data=payload,
+        headers={"Content-Type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=30.0) as resp:
+            body = json.loads(resp.read().decode("utf-8"))
+        generated = body.get("response", "").strip()
+        return generated if generated else query
+    except Exception as exc:
+        print(f"[pocket.retrieval] HyDE expansion failed, using original query: {exc}")
+        return query
+
+
+# ---------------------------------------------------------------------------
+# Cross-encoder reranker (precision pass after RRF / MMR)
+# ---------------------------------------------------------------------------
+
+@lru_cache(maxsize=2)
+def _get_reranker(model_name: str):
+    """Load and cache a sentence_transformers CrossEncoder.
+
+    Returns ``None`` when the class or model is unavailable (e.g. model not
+    yet downloaded) so the caller can degrade gracefully to RRF order.
+    Cached per model-name so swapping ``POCKET_RERANKER_MODEL`` at runtime
+    does not reload an already-warm model on the next call.
+    """
+    try:
+        from sentence_transformers import CrossEncoder  # noqa: PLC0415
+        return CrossEncoder(model_name)
+    except Exception as exc:
+        print(f"[pocket.retrieval] Reranker model {model_name!r} failed to load: {exc}")
+        return None
+
+
+def _rerank(
+    query: str,
+    hits: List[RetrievalHit],
+    model_name: str,
+) -> List[RetrievalHit]:
+    """Re-score *hits* with a cross-encoder and return them sorted by that score.
+
+    Cross-encoders attend to (query, passage) jointly so they weigh lexical
+    overlap and semantic entailment together — precision typically rises 5–15 %
+    over single-vector dot-product scoring at the cost of one forward pass per
+    candidate.  The :attr:`RetrievalHit.reranker_rank` field is set on every
+    returned hit so callers and the tracing UI can see where the reranker moved
+    each chunk relative to the original RRF position.
+
+    Falls back silently to the incoming RRF order when the model is unavailable.
+    """
+    if not hits:
+        return hits
+    model = _get_reranker(model_name)
+    if model is None:
+        return hits
+    try:
+        pairs = [(query, h.text) for h in hits]
+        scores = model.predict(pairs)
+        ranked = sorted(
+            zip(scores, hits), key=lambda x: float(x[0]), reverse=True
+        )
+        result: List[RetrievalHit] = []
+        for rank, (score, hit) in enumerate(ranked, start=1):
+            hit.reranker_rank = rank
+            hit.score = float(score)
+            result.append(hit)
+        return result
+    except Exception as exc:
+        print(f"[pocket.retrieval] Reranker scoring failed, using RRF order: {exc}")
+        return hits
 
 
 def routing_trace(

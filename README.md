@@ -405,6 +405,10 @@ To connect Claude Code or Cursor to your Pocket knowledge base, add the followin
 
 ## 🗺️ Roadmap
 
+<p align="center">
+  <img src="docs/images/roadmap.svg" alt="genome-pocket roadmap: cocoindex migration phases P0–P6 and 2026 SOTA improvements POCKET-601 through POCKET-607" width="100%" />
+</p>
+
 Genome-pocket is evolving toward full adoption of the `cocoindex` runtime. The phased plan (full details in [`docs/architecture/cocoindex-gap.md`](docs/architecture/cocoindex-gap.md)):
 
 | Phase | What | Status |

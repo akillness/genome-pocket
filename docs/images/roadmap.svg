@@ -71,7 +71,7 @@
   <rect x="11" y="155" width="4" height="86" rx="2" fill="#22c55e" opacity="0.65"/>
   <text x="86" y="173" text-anchor="middle" font-size="10" font-weight="700" fill="#4ade80">Test Infra</text>
   <text x="86" y="189" text-anchor="middle" font-size="8.5" fill="#86efac">MockEmbedder patch</text>
-  <text x="86" y="203" text-anchor="middle" font-size="8.5" fill="#86efac">146 tests · offline</text>
+  <text x="86" y="203" text-anchor="middle" font-size="8.5" fill="#86efac">169 tests · offline</text>
   <text x="86" y="217" text-anchor="middle" font-size="8.5" fill="#86efac">run_tests.sh &lt; 10 s</text>
   <rect x="36" y="231" width="100" height="16" rx="8" fill="#16a34a" opacity="0.85"/>
   <text x="86" y="242" text-anchor="middle" font-size="8" font-weight="600" fill="#fff">&#x2705; done</text>
@@ -115,44 +115,44 @@
   <rect x="540" y="231" width="100" height="16" rx="8" fill="#16a34a" opacity="0.85"/>
   <text x="590" y="242" text-anchor="middle" font-size="8" font-weight="600" fill="#fff">&#x2705; done</text>
 
-  <!-- ── P4 next ── -->
-  <line x1="758" y1="147" x2="758" y2="154" stroke="#f59e0b" stroke-width="1.5" opacity="0.7"/>
-  <circle cx="758" cy="128" r="18" fill="url(#gn)" filter="url(#fn)"/>
+  <!-- ── P4 done ── -->
+  <line x1="758" y1="147" x2="758" y2="154" stroke="#22c55e" stroke-width="1.5" opacity="0.65"/>
+  <circle cx="758" cy="128" r="18" fill="url(#gd)" filter="url(#fd)"/>
   <text x="758" y="133" text-anchor="middle" font-size="10.5" font-weight="700" fill="#fff">P4</text>
-  <rect x="681" y="154" width="154" height="102" rx="8" fill="#1a1200" stroke="#f59e0b" stroke-width="1.3" filter="url(#fs)"/>
-  <rect x="683" y="155" width="4" height="86" rx="2" fill="#f59e0b" opacity="0.65"/>
-  <text x="758" y="173" text-anchor="middle" font-size="10" font-weight="700" fill="#fcd34d">State-diff &#x0394; writes</text>
-  <text x="758" y="189" text-anchor="middle" font-size="8.5" fill="#fde68a">statediff.DiffAction</text>
-  <text x="758" y="203" text-anchor="middle" font-size="8.5" fill="#fde68a">upsert / delete</text>
-  <text x="758" y="217" text-anchor="middle" font-size="8.5" fill="#fde68a">no chunk accumulation</text>
-  <rect x="706" y="231" width="104" height="16" rx="8" fill="#d97706" opacity="0.85"/>
-  <text x="758" y="242" text-anchor="middle" font-size="8" font-weight="600" fill="#fff">&#x23F3; next</text>
+  <rect x="681" y="154" width="154" height="102" rx="8" fill="url(#cd)" stroke="#22c55e" stroke-width="1.3" filter="url(#fs)"/>
+  <rect x="683" y="155" width="4" height="86" rx="2" fill="#22c55e" opacity="0.65"/>
+  <text x="758" y="173" text-anchor="middle" font-size="10" font-weight="700" fill="#4ade80">State-diff &#x0394; writes</text>
+  <text x="758" y="189" text-anchor="middle" font-size="8.5" fill="#86efac">statediff.diff per row</text>
+  <text x="758" y="203" text-anchor="middle" font-size="8.5" fill="#86efac">insert / replace / skip</text>
+  <text x="758" y="217" text-anchor="middle" font-size="8.5" fill="#86efac">row_writes / row_skips</text>
+  <rect x="706" y="231" width="104" height="16" rx="8" fill="#16a34a" opacity="0.85"/>
+  <text x="758" y="242" text-anchor="middle" font-size="8" font-weight="600" fill="#fff">&#x2705; done</text>
 
-  <!-- ── P5 planned ── -->
-  <line x1="926" y1="147" x2="926" y2="154" stroke="#4b5563" stroke-width="1.5" stroke-dasharray="4,3" opacity="0.6"/>
-  <circle cx="926" cy="128" r="18" fill="url(#gp)" filter="url(#fp)"/>
-  <text x="926" y="133" text-anchor="middle" font-size="10.5" font-weight="700" fill="#d1d5db">P5</text>
-  <rect x="849" y="154" width="154" height="102" rx="8" fill="url(#cp)" stroke="#4b5563" stroke-width="1.3" filter="url(#fs)"/>
-  <rect x="851" y="155" width="4" height="86" rx="2" fill="#4b5563" opacity="0.65"/>
-  <text x="926" y="173" text-anchor="middle" font-size="10" font-weight="700" fill="#d1d5db">Persistent Memo</text>
-  <text x="926" y="189" text-anchor="middle" font-size="8.5" fill="#9ca3af">SQLite-backed</text>
-  <text x="926" y="203" text-anchor="middle" font-size="8.5" fill="#9ca3af">@fn(memo=True)</text>
-  <text x="926" y="217" text-anchor="middle" font-size="8.5" fill="#9ca3af">survives restarts</text>
-  <rect x="872" y="231" width="108" height="16" rx="8" fill="#374151" opacity="0.85"/>
-  <text x="926" y="242" text-anchor="middle" font-size="8" font-weight="600" fill="#9ca3af">&#x23F3; planned</text>
+  <!-- ── P5 done ── -->
+  <line x1="926" y1="147" x2="926" y2="154" stroke="#22c55e" stroke-width="1.5" opacity="0.65"/>
+  <circle cx="926" cy="128" r="18" fill="url(#gd)" filter="url(#fd)"/>
+  <text x="926" y="133" text-anchor="middle" font-size="10.5" font-weight="700" fill="#fff">P5</text>
+  <rect x="849" y="154" width="154" height="102" rx="8" fill="url(#cd)" stroke="#22c55e" stroke-width="1.3" filter="url(#fs)"/>
+  <rect x="851" y="155" width="4" height="86" rx="2" fill="#22c55e" opacity="0.65"/>
+  <text x="926" y="173" text-anchor="middle" font-size="10" font-weight="700" fill="#4ade80">Logic-fp Memo</text>
+  <text x="926" y="189" text-anchor="middle" font-size="8.5" fill="#86efac">memo already</text>
+  <text x="926" y="203" text-anchor="middle" font-size="8.5" fill="#86efac">SQLite-persistent</text>
+  <text x="926" y="217" text-anchor="middle" font-size="8.5" fill="#86efac">logic fp invalidates</text>
+  <rect x="872" y="231" width="108" height="16" rx="8" fill="#16a34a" opacity="0.85"/>
+  <text x="926" y="242" text-anchor="middle" font-size="8" font-weight="600" fill="#fff">&#x2705; done</text>
 
-  <!-- ── P6 in progress ── -->
-  <line x1="1094" y1="147" x2="1094" y2="154" stroke="#f97316" stroke-width="1.5" opacity="0.7"/>
-  <circle cx="1094" cy="128" r="18" fill="url(#gi)" filter="url(#fi)"/>
+  <!-- ── P6 done ── -->
+  <line x1="1094" y1="147" x2="1094" y2="154" stroke="#22c55e" stroke-width="1.5" opacity="0.65"/>
+  <circle cx="1094" cy="128" r="18" fill="url(#gd)" filter="url(#fd)"/>
   <text x="1094" y="133" text-anchor="middle" font-size="10.5" font-weight="700" fill="#fff">P6</text>
-  <rect x="1017" y="154" width="154" height="102" rx="8" fill="#1a0a00" stroke="#f97316" stroke-width="1.3" filter="url(#fs)"/>
-  <rect x="1019" y="155" width="4" height="86" rx="2" fill="#f97316" opacity="0.65"/>
-  <text x="1094" y="173" text-anchor="middle" font-size="10" font-weight="700" fill="#fb923c">Native Coco PoC</text>
-  <text x="1094" y="189" text-anchor="middle" font-size="8.5" fill="#fed7aa">pipeline_coco.py</text>
-  <text x="1094" y="203" text-anchor="middle" font-size="8.5" fill="#fed7aa">App / fn / map engine</text>
-  <text x="1094" y="217" text-anchor="middle" font-size="8.5" fill="#fed7aa">POCKET_PIPELINE=coco</text>
-  <rect x="1030" y="231" width="128" height="16" rx="8" fill="#ea580c" opacity="0.85"/>
-  <text x="1094" y="242" text-anchor="middle" font-size="8" font-weight="600" fill="#fff">&#x1F6A7; in progress</text>
+  <rect x="1017" y="154" width="154" height="102" rx="8" fill="url(#cd)" stroke="#22c55e" stroke-width="1.3" filter="url(#fs)"/>
+  <rect x="1019" y="155" width="4" height="86" rx="2" fill="#22c55e" opacity="0.65"/>
+  <text x="1094" y="173" text-anchor="middle" font-size="10" font-weight="700" fill="#4ade80">full_reprocess</text>
+  <text x="1094" y="189" text-anchor="middle" font-size="8.5" fill="#86efac">force clean rebuild</text>
+  <text x="1094" y="203" text-anchor="middle" font-size="8.5" fill="#86efac">bypasses memo path</text>
+  <text x="1094" y="217" text-anchor="middle" font-size="8.5" fill="#86efac">--full-reprocess</text>
+  <rect x="1040" y="231" width="108" height="16" rx="8" fill="#16a34a" opacity="0.85"/>
+  <text x="1094" y="242" text-anchor="middle" font-size="8" font-weight="600" fill="#fff">&#x2705; done</text>
 
   <!-- ══════ SECTION 2: 2026 SOTA ══════ -->
   <rect x="28" y="270" width="1144" height="30" rx="6" fill="#0d1f35" stroke="#1e3a5f" stroke-width="1.2"/>

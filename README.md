@@ -74,7 +74,7 @@ genome-pocket/
 │   ├── cli.py                # CLI commands (init, update, search, graph, eval, serve, ls, show, drop)
 │   ├── config.py             # Configuration & environment variables
 │   ├── pipeline.py           # ETL pipeline wiring (Source→Refine→Load + graph)
-│   ├── pipeline_coco.py      # Native cocoindex PoC pipeline (side-by-side, opt-in)
+│   ├── pipeline_native.py    # Native cocoindex PoC pipeline (side-by-side, opt-in)
 │   ├── retrieval.py          # Hybrid retrieval (vector + lexical + RRF) + routing_trace, shared by CLI/MCP/API
 │   ├── admin.py              # Write-side lifecycle ops (drop/reset target + companions)
 │   ├── evaluation.py         # Retrieval regression harness (Hit@k/MRR/MAP, baselines)
@@ -418,7 +418,8 @@ To connect Claude Code or Cursor to your Pocket knowledge base, add the followin
     }
   }
 }
-```
+  <img src="docs/images/roadmap.svg" alt="genome-pocket roadmap: cocoindex migration phases P0–P6 (all critical-gap phases complete) plus the in-progress P7 native-cocoindex PoC, and 2026 SOTA improvements POCKET-601 through POCKET-607" style="max-width:100%;width:100%;cursor:zoom-in;" />
+
 
 ### Exposed Tools
 - `search_knowledge(query: str, limit: int = 5, mode: str = "hybrid")`: Search the personal knowledge base using hybrid (vector + lexical) retrieval; `mode` is `hybrid`, `vector`, or `lexical`.
@@ -431,22 +432,24 @@ To connect Claude Code or Cursor to your Pocket knowledge base, add the followin
 ## 🗺️ Roadmap
 
 <p align="center">
-  <img src="docs/images/roadmap.svg" alt="genome-pocket roadmap: cocoindex migration phases P0–P6 and 2026 SOTA improvements POCKET-601 through POCKET-607" style="max-width:100%;width:100%;cursor:zoom-in;" />
+  <img src="docs/images/roadmap.svg" alt="genome-pocket roadmap: cocoindex migration phases P0–P6 (all critical-gap phases complete), plus the completed P7 live-mode push and the in-progress P8 native-cocoindex PoC, and 2026 SOTA improvements POCKET-601 through POCKET-607" style="max-width:100%;width:100%;cursor:zoom-in;" />
 </p>
 
 Genome-pocket is evolving toward full adoption of the `cocoindex` runtime. The phased plan (full details in [`docs/architecture/cocoindex-gap.md`](docs/architecture/cocoindex-gap.md)):
 
 | Phase | What | Status |
 |-------|------|--------|
-| P0 | **Test infra** — `MockEmbedder` session patch; the whole suite (now 162 tests) runs offline in < 10 s via `bash run_tests.sh` | ✅ done |
+| P0 | **Test infra** — `MockEmbedder` session patch; the whole suite (now 169 tests) runs offline in < 10 s via `bash run_tests.sh` | ✅ done |
 
 
 | P1 | **Content fingerprinting** — `cocoindex.connectorkits.fingerprint` replaces SHA-256 in `_compute_memo_hash`; unchanged files skip re-index | ✅ done |
 | P2 | **Concurrent `map()`** — `asyncio.gather` replaces sequential loop; matches real cocoindex contract | ✅ done |
 | P3 | **`list_concepts` MCP** — live graph query via `retrieval.list_graph_concepts()`; `POCKET_GRAPH=1` guard | ✅ done |
 | P4 | **State-diff delta writes** — `connectorkits.statediff.diff` drives a per-row `insert`/`replace`/skip decision in `sqlite.TableTarget.declare_row`; reprocessing rewrites only changed rows (no FTS churn) and `UpdateStats` reports `row_writes`/`row_skips` | ✅ done |
-| P5 | **Persistent memo store** — SQLite-backed `@fn(memo=True)` that survives restarts | ⏳ planned |
-| P6 | **Native cocoindex PoC** — `pocket/pipeline_coco.py` (run via `POCKET_PIPELINE=coco`): real cocoindex splitter/embedder ops wired in; full `App`/`fn`/`map` engine swap pending | 🚧 in progress |
+| P5 | **Logic-fingerprint memo** — the SQLite-backed memo (`_pocket_memo`) already survives restarts; P5 closes the last gap by folding a transform **logic fingerprint** (`inspect.getsource` → cocoindex/SHA-256) into every memo key, so editing the pipeline code invalidates stale memos and reprocesses unchanged files instead of serving old-code output | ✅ done |
+| P6 | **`full_reprocess` flag** — `App.update_blocking(full_reprocess=True)` / `pocket update --full-reprocess` forces a clean rebuild: `mount_each` bypasses the memo fast-path so every transform re-runs even on unchanged fingerprints, while the per-row state-diff still dedups physical writes (no row churn). Live mode forces only the catch-up pass | ✅ done |
+| P7 | **Live-mode push** — live indexing is change-driven, not interval-polled: connectors self-register via `register_source` and `LocalFS.signature()` exposes a cheap `(mtime, size)` map, so the live loop only re-runs the pipeline on an actual add/edit/delete (idle costs just a stat scan, not a full re-embed). Sources without a `signature()` fall back to polling so no change is missed | ✅ done |
+| P8 | **Native cocoindex PoC** — `pocket/pipeline_native.py` (run via `POCKET_PIPELINE=native`): real cocoindex splitter/embedder ops wired in; full `App`/`fn`/`map` engine swap pending | 🚧 in progress |
 
 **2026 SOTA improvements** (shipped):
 

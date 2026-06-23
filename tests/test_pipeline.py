@@ -223,6 +223,82 @@ class TestPocketPipeline(unittest.TestCase):
         finally:
             pipeline.process_file = original
 
+    def test_logic_fingerprint_folds_into_memo_hash(self):
+        """Editing a transform's source must change its logic fingerprint and,
+        through it, the memo hash — so a pipeline code change invalidates stale
+        memos instead of serving output produced by the old code."""
+        import asyncio
+
+        async def fa(x):
+            return x
+
+        async def fb(x):
+            _ = "a different transform body"
+            return x
+
+        sig_a = pix._logic_fingerprint(fa)
+        sig_b = pix._logic_fingerprint(fb)
+        self.assertNotEqual(sig_a, sig_b, "different source -> different fingerprint")
+        self.assertEqual(sig_a, pix._logic_fingerprint(fa), "fingerprint must be stable")
+
+        class _FakeFile:
+            def __init__(self, text):
+                self._text = text
+
+            def read_text(self):
+                return self._text
+
+        f = _FakeFile("hello pocket world")
+        h_a = asyncio.run(pix._compute_memo_hash(f, sig_a))
+        h_b = asyncio.run(pix._compute_memo_hash(f, sig_b))
+        h_a2 = asyncio.run(pix._compute_memo_hash(f, sig_a))
+        h_none = asyncio.run(pix._compute_memo_hash(f, ""))
+        self.assertEqual(h_a, h_a2, "same logic + content must memo-match")
+        self.assertNotEqual(h_a, h_b, "logic change must change the memo hash")
+        self.assertNotEqual(h_none, h_a, "folding logic_sig must alter the hash")
+
+    def test_logic_change_invalidates_memo(self):
+        """End-to-end: re-running with edited transform logic reprocesses an
+        unchanged source file (cocoindex logic-fingerprint memo semantics)."""
+        import pocket.pipeline as pipeline
+
+        original = pipeline.process_file
+        calls = []
+
+        async def variant_a(file, table):
+            calls.append("a")
+            return await original(file, table)
+        variant_a._pix_fn = True
+        variant_a._memo = True
+
+        async def variant_b(file, table):
+            calls.append("b")
+            _marker = "revision b chunks differently"
+            return await original(file, table)
+        variant_b._pix_fn = True
+        variant_b._memo = True
+
+        try:
+            pipeline.process_file = variant_a
+            self._run()
+            base_rows = self._count_rows()
+            self.assertGreater(base_rows, 0)
+
+            # Same logic, no content edit -> memo skips (control).
+            calls.clear()
+            pipeline.process_file = variant_a
+            self._run()
+            self.assertEqual(calls, [], "identical logic + content must be skipped")
+
+            # Edited transform logic -> unchanged file is reprocessed.
+            calls.clear()
+            pipeline.process_file = variant_b
+            self._run()
+            self.assertEqual(calls, ["b"], "logic change must invalidate the memo")
+            self.assertEqual(self._count_rows(), base_rows, "row set stays consistent")
+        finally:
+            pipeline.process_file = original
+
     def test_deletion_propagates(self):
         """DoD #4: deleting a source file removes its chunks from the DB."""
         second = self.source_dir / "second.md"
@@ -289,6 +365,93 @@ class TestPocketPipeline(unittest.TestCase):
         total = stats.total
         self.assertEqual(total.num_deletes, 1)
 
+    def test_full_reprocess_forces_rebuild_of_unchanged_files(self):
+        """C5 full_reprocess: a forced run re-executes every transform even when
+        fingerprints are unchanged, without duplicating target rows, and the
+        next ordinary run reverts to the incremental fast path."""
+        from pocket.pipeline import app_main
+
+        second = self.source_dir / "second.md"
+        second.write_text("# Second\n\nAnother note about pocket knowledge.")
+
+        def make_app():
+            return pix.App(
+                "pocket_test",
+                app_main,
+                sourcedir=self.source_dir,
+                db_path=self.db_path,
+            )
+
+        # First run: both files are brand-new adds.
+        stats = make_app().update_blocking(live=False, report_to_stdout=False)
+        self.assertEqual(stats.total.num_adds, 2)
+        rows_after_first = self._count_rows()
+        self.assertGreater(rows_after_first, 0)
+
+        # Sanity: an ordinary second run would skip both as unchanged.
+        stats = make_app().update_blocking(live=False, report_to_stdout=False)
+        self.assertEqual(stats.total.num_unchanged, 2)
+        self.assertEqual(stats.total.num_reprocesses, 0)
+
+        # Forced run: both files re-run their transform despite unchanged
+        # fingerprints — nothing is skipped as unchanged.
+        stats = make_app().update_blocking(
+            live=False, report_to_stdout=False, full_reprocess=True
+        )
+        self.assertEqual(stats.total.num_reprocesses, 2)
+        self.assertEqual(stats.total.num_unchanged, 0)
+        self.assertEqual(stats.total.num_adds, 0)
+        self.assertEqual(stats.total.num_errors, 0)
+        # A clean rebuild must not duplicate or drop rows.
+        self.assertEqual(self._count_rows(), rows_after_first)
+        self.assertEqual(self._count_fts_rows(), rows_after_first)
+
+        # State is intact: the following ordinary run is incremental again.
+        stats = make_app().update_blocking(live=False, report_to_stdout=False)
+        self.assertEqual(stats.total.num_unchanged, 2)
+        self.assertEqual(stats.total.num_reprocesses, 0)
+
+    def test_update_cli_threads_full_reprocess_flag(self):
+        """The `pocket update --full-reprocess` flag reaches
+        `App.update_blocking(full_reprocess=True)`; the default run leaves it
+        off."""
+        from unittest import mock
+        from click.testing import CliRunner
+        from pocket import cli as cli_module
+
+        captured = {}
+
+        class _FakeApp:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def update_blocking(self, **kwargs):
+                captured.clear()
+                captured.update(kwargs)
+
+                from types import SimpleNamespace
+
+                counters = SimpleNamespace(
+                    num_adds=0,
+                    num_reprocesses=0,
+                    num_unchanged=0,
+                    num_deletes=0,
+                    num_errors=0,
+                )
+                return SimpleNamespace(total=counters)
+
+        runner = CliRunner()
+        with mock.patch.object(cli_module.pix, "App", _FakeApp):
+            res_off = runner.invoke(cli_module.cli, ["update"])
+            self.assertEqual(res_off.exit_code, 0, res_off.output)
+            self.assertFalse(captured.get("full_reprocess"))
+            self.assertNotIn("Full reprocess requested", res_off.output)
+
+            res_on = runner.invoke(cli_module.cli, ["update", "--full-reprocess"])
+            self.assertEqual(res_on.exit_code, 0, res_on.output)
+            self.assertTrue(captured.get("full_reprocess"))
+            self.assertIn("Full reprocess requested", res_on.output)
+
     def test_live_mode_picks_up_new_file(self):
         """Live mode: a file created after the first pass is indexed by a later
         polling pass, then the watcher stops cleanly."""
@@ -326,6 +489,120 @@ class TestPocketPipeline(unittest.TestCase):
             self._count_rows("file_path LIKE '%late.md'"),
             0,
             "live mode must index files created after startup",
+        )
+
+    def test_live_mode_push_skips_run_when_sources_unchanged(self):
+        """W2 push: while live mode is idle (no source file added, edited, or
+        removed) the pipeline must NOT re-execute on every interval. Blind
+        polling re-runs the whole pipeline each tick; the push model only acts
+        on an actual change event."""
+        import asyncio
+        from pocket.pipeline import app_main
+
+        runs = []
+
+        async def counting_main(**kwargs):
+            runs.append(1)
+            await app_main(**kwargs)
+
+        app = pix.App(
+            "pocket_test", counting_main,
+            sourcedir=self.source_dir, db_path=self.db_path,
+        )
+
+        async def drive():
+            run = asyncio.create_task(
+                app.run_async(live=True, report_to_stdout=False, live_interval=0.1)
+            )
+            # ~5 ticks with no filesystem change.
+            await asyncio.sleep(0.55)
+            run.cancel()
+            try:
+                await run
+            except asyncio.CancelledError:
+                pass
+
+        asyncio.run(drive())
+        self.assertEqual(
+            len(runs), 1,
+            "idle live mode must not re-run the pipeline when no source file changed",
+        )
+
+    def test_live_mode_push_reruns_when_file_modified(self):
+        """W2 push: editing an existing source file's content must trigger a
+        re-run promptly (change event), not stay frozen."""
+        import asyncio
+        from pocket.pipeline import app_main
+
+        runs = []
+
+        async def counting_main(**kwargs):
+            runs.append(1)
+            await app_main(**kwargs)
+
+        app = pix.App(
+            "pocket_test", counting_main,
+            sourcedir=self.source_dir, db_path=self.db_path,
+        )
+
+        async def drive():
+            run = asyncio.create_task(
+                app.run_async(live=True, report_to_stdout=False, live_interval=0.1)
+            )
+            await asyncio.sleep(0.3)  # catch-up pass done, now idle
+            self.note_file.write_text(
+                "# Test Note\n\nEdited content must push a live re-run."
+            )
+            await asyncio.sleep(0.4)
+            run.cancel()
+            try:
+                await run
+            except asyncio.CancelledError:
+                pass
+
+        asyncio.run(drive())
+        self.assertGreaterEqual(
+            len(runs), 2,
+            "editing a source file must push a re-run in live mode",
+        )
+
+    def test_live_mode_push_reruns_when_file_deleted(self):
+        """W2 push: removing a source file is a change event and must trigger a
+        re-run so the deletion propagates to the target."""
+        import asyncio
+        from pocket.pipeline import app_main
+
+        extra = self.source_dir / "extra.md"
+        extra.write_text("# Extra\n\nThis note will be deleted while live.")
+
+        runs = []
+
+        async def counting_main(**kwargs):
+            runs.append(1)
+            await app_main(**kwargs)
+
+        app = pix.App(
+            "pocket_test", counting_main,
+            sourcedir=self.source_dir, db_path=self.db_path,
+        )
+
+        async def drive():
+            run = asyncio.create_task(
+                app.run_async(live=True, report_to_stdout=False, live_interval=0.1)
+            )
+            await asyncio.sleep(0.3)  # catch-up pass done, now idle
+            extra.unlink()
+            await asyncio.sleep(0.4)
+            run.cancel()
+            try:
+                await run
+            except asyncio.CancelledError:
+                pass
+
+        asyncio.run(drive())
+        self.assertGreaterEqual(
+            len(runs), 2,
+            "deleting a source file must push a re-run in live mode",
         )
 
     def test_abort_source_discards_uncommitted_rows(self):

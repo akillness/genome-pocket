@@ -19,7 +19,7 @@ Migration checklist:
 To run a one-off comparison against the standard pipeline::
 
     pocket update                        # uses pocket/pipeline.py
-    POCKET_PIPELINE=coco pocket update   # uses pocket/pipeline_coco.py (PoC)
+    POCKET_PIPELINE=native pocket update   # uses pocket/pipeline_native.py (PoC)
 
 The env var routing is wired in pocket/cli.py (see _get_app_main()).
 """
@@ -41,10 +41,10 @@ from pocketindex.resources.id import IdGenerator
 from pocketindex.resources.chunk import Chunk
 
 # ── Ops: real cocoindex (the migration payload) ──────────────────────────────
-from cocoindex.ops.text import RecursiveSplitter as CocoRecursiveSplitter
-from cocoindex.ops.text import detect_code_language as coco_detect_code_language
+from cocoindex.ops.text import RecursiveSplitter as NativeRecursiveSplitter
+from cocoindex.ops.text import detect_code_language as native_detect_code_language
 from cocoindex.ops.sentence_transformers import (
-    SentenceTransformerEmbedder as CocoSentenceTransformerEmbedder,
+    SentenceTransformerEmbedder as NativeSentenceTransformerEmbedder,
 )
 
 # ── Ops: pocketindex-only (not yet in cocoindex, kept as-is) ─────────────────
@@ -56,7 +56,7 @@ import pocket.config as config
 
 
 # ── Context keys (same as pipeline.py) ───────────────────────────────────────
-EMBEDDER = pix.ContextKey[CocoSentenceTransformerEmbedder]("embedder")
+EMBEDDER = pix.ContextKey[NativeSentenceTransformerEmbedder]("embedder")
 SQLITE_DB = pix.ContextKey[sqlite.ManagedConnection]("sqlite_db")
 
 
@@ -96,19 +96,19 @@ class RelationEdge:
 
 
 # ── Ops instances (cocoindex versions) ────────────────────────────────────────
-_splitter = CocoRecursiveSplitter()
+_splitter = NativeRecursiveSplitter()
 _refiner = TextRefiner()  # pocketindex — no cocoindex equivalent yet
 
 
 @pix.lifespan
-async def pocket_coco_lifespan(
+async def pocket_native_lifespan(
     builder: pix.EnvironmentBuilder,
 ) -> AsyncIterator[None]:
     """Lifespan: provide cocoindex embedder + pocketindex SQLite connection."""
     import os
 
     # Real cocoindex SentenceTransformerEmbedder (thread-safe, VectorSchemaProvider)
-    builder.provide(EMBEDDER, CocoSentenceTransformerEmbedder(config.EMBEDDING_MODEL))
+    builder.provide(EMBEDDER, NativeSentenceTransformerEmbedder(config.EMBEDDING_MODEL))
     db_path = os.getenv("POCKET_SQLITE_DB") or str(config.POCKET_SQLITE_DB)
     builder.provide_with(SQLITE_DB, sqlite.managed_connection(db_path, load_vec=True))
     yield
@@ -120,7 +120,7 @@ def _chunk_file(raw_text: str, filename: pathlib.PurePath) -> List[Chunk]:
     detect_code_language and RecursiveSplitter come from cocoindex.ops.text;
     TextRefiner remains pocketindex (no cocoindex equivalent).
     """
-    language = coco_detect_code_language(filename=filename.name)
+    language = native_detect_code_language(filename=filename.name)
     is_code = language is not None and language not in ("markdown", "html")
     refined = _refiner.refine(raw_text, code=is_code)
     # cocoindex RecursiveSplitter has the same split() contract
@@ -136,11 +136,11 @@ def _chunk_file(raw_text: str, filename: pathlib.PurePath) -> List[Chunk]:
 @pix.fn
 async def process_chunk(
     chunk: Chunk,
-    embedder: CocoSentenceTransformerEmbedder,
+    embedder: NativeSentenceTransformerEmbedder,
     file_path: str,
 ) -> ChunkEmbedding:
     """Embed a single chunk with the cocoindex embedder."""
-    # CocoSentenceTransformerEmbedder exposes .embed() just like the pocketindex wrapper
+    # NativeSentenceTransformerEmbedder exposes .embed() just like the pocketindex wrapper
     vector = await embedder.embed(chunk.text)
     return ChunkEmbedding(
         id=IdGenerator.from_text(chunk.text),

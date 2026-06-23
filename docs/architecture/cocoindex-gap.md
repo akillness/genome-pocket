@@ -25,9 +25,9 @@ correctness bugs and block several planned features.
 |---|--------------------|-----------------------|------------------|----------------|
 | C1 | **Content fingerprinting** | Always full-reprocess every file on every run | `connectorkits.fingerprint.fingerprint_bytes/str/object` | `pocketindex/__init__.py` `mount_each`, `pocketindex/connectors/localfs.py` |
 | C2 | **State-diff / delta writes** | ✅ Done — `end_source`/`sweep` delete orphaned chunks, and `declare_row` now uses `connectorkits.statediff.diff` for a per-row `insert`/`replace`/skip decision so unchanged rows are not rewritten | `connectorkits.statediff.DiffAction`, `TrackingRecordTransition` | `pocketindex/connectors/sqlite.py` `TableTarget` |
-| C3 | **`map()` concurrency** | Sequential `for` loop | `cocoindex.map()` fans out as concurrent async tasks | `pocketindex/__init__.py` `map()` |
-| C4 | **`fn(memo=True)` scope** | Per-run in-memory dict; cleared on restart | LMDB-backed persistent memo, keyed by logic fingerprint | `pocketindex/__init__.py` `fn` decorator |
-| C5 | **`full_reprocess` flag** | Not implemented | `App.update_blocking(full_reprocess=True)` | `pocketindex/__init__.py` `App.update_blocking` |
+| C3 | **`map()` concurrency** | ✅ Done — `map()` fans items out via `asyncio.gather` | `cocoindex.map()` concurrent async tasks | `pocketindex/__init__.py` `map()` |
+| C4 | **`fn(memo=True)` scope** | ✅ Done — the memo store was already SQLite-backed (`_pocket_memo` / `_pocket_extract_memo`) and survives restarts; remaining gap closed by folding a transform **logic fingerprint** into every memo key (`_logic_fingerprint` in `mount_each`), so editing pipeline code invalidates stale memos | `connectorkits.fingerprint`, `inspect.getsource` | `pocketindex/__init__.py` `fn` / `mount_each` / `_compute_memo_hash` |
+| C5 | **`full_reprocess` flag** | ✅ Done — `App.update_blocking(full_reprocess=True)` (and `--full-reprocess` on `pocket update`) sets a `_FULL_REPROCESS` contextvar that makes `mount_each` bypass the memo fast-path, re-running every transform; the per-row state-diff still dedups physical writes so no rows are duplicated. In live mode only the catch-up pass is forced. | `App.update_blocking` / `run_async` / `mount_each` | `pocketindex/__init__.py`, `pocket/cli.py` |
 
 ---
 
@@ -36,7 +36,7 @@ correctness bugs and block several planned features.
 | # | Missing workflow | Impact | Target location |
 |---|-----------------|--------|-----------------|
 | W1 | **`list_concepts` MCP tool** is a stub | Cannot browse knowledge graph via MCP | `pocket/mcp_server.py` |
-| W2 | **Live mode uses polling** (`asyncio.sleep`) | File edits detected only on next poll | `pocketindex/__init__.py` live loop |
+| W2 | ✅ Done — **Live mode is push/change-driven.** Connectors self-register via `register_source`; `LocalFS.signature()` exposes a cheap `(mtime, size)` map and the live loop only re-runs the pipeline when an add/edit/delete is observed (idle = stat scan, not a full re-embed). Sources without `signature()` fall back to interval polling so no change is missed | File edits picked up promptly; no wasted reprocessing while idle | `pocketindex/__init__.py` live loop, `pocketindex/connectors/localfs.py` |
 | W3 | **No progress display** | Long index runs are silent | missing `show_progress` / `UpdateHandle` |
 | W4 | **No GPU runner** | `fn(runner=cocoindex.GPU)` not available | `pocketindex/__init__.py` |
 | W5 | **No multi-app registry** | `list_app_names()` not available | `pocketindex/__init__.py` |
@@ -81,7 +81,7 @@ correctness bugs and block several planned features.
 10. Add `GPU` runner stub to `pocketindex/__init__.py` for API parity.
 
 ### Phase 4 — Native cocoindex PoC (1 sprint)
-11. Create `pocket/pipeline_coco.py` replacing `pocketindex` imports with real `cocoindex`.
+11. Create `pocket/pipeline_native.py` replacing `pocketindex` imports with real `cocoindex`.
 12. Wire `cocoindex.Settings(db_path=...)` and adapt `TableTarget` to native target handler.
 13. Run side-by-side, compare output; retire `pocketindex/` once parity confirmed.
 
@@ -90,13 +90,16 @@ correctness bugs and block several planned features.
 ## 6. Priority order
 
 ```
-P0  T1-T3   MockEmbedder — unblocks all other work
-P1  C1      Fingerprinting — biggest correctness win; large repos re-index fully every run
+P0  T1-T3   MockEmbedder — DONE (unblocked all other work)
+P1  C1      Fingerprinting — DONE (biggest correctness win)
 P2  C2      State-diff delta writes — DONE (orphan sweep + per-row statediff skip)
-P3  W1      list_concepts MCP — user-visible, ~30 min to implement
-P4  C3      map() concurrency — throughput improvement for multi-file batches
-P5  W2      Live mode push — polling is functionally correct, lower priority
-P6  Phase4  Native cocoindex migration — defer until Phases 0-3 are green
+P3  W1      list_concepts MCP — DONE (live graph query, POCKET_GRAPH guard)
+P4  C3      map() concurrency — DONE (asyncio.gather fan-out)
+P5  C4      fn(memo=True) logic-fingerprint keying — DONE (memo already persistent; logic fp folded in)
+P5  C4      fn(memo=True) logic-fingerprint keying — DONE (memo already persistent; logic fp folded in)
+P6  C5      full_reprocess flag — DONE (force a clean rebuild on demand; --full-reprocess)
+P7  W2      Live mode push — DONE (change-driven via source signatures; idle costs only a stat scan)
+P8  Phase4  Native cocoindex migration — defer until the gaps above are green
 ```
 
 ---

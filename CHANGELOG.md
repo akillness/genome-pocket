@@ -12,6 +12,51 @@ by installing it in an isolated venv and diffing its public API against the
 vendored `pocketindex` engine.
 
 ### Added
+- **Push-style live mode (POCKET-W2, cocoindex live push).** Live indexing is
+  now change-driven instead of blind interval polling. Source connectors
+  self-register via `pocketindex.register_source`, and `LocalFS.signature()`
+  exposes a cheap `(mtime_ns, size)` map of the indexable files. The live loop
+  compares successive signatures and only re-runs the pipeline when an actual
+  add, edit, or delete is observed — an idle watch now costs a single `stat`
+  scan per interval instead of a full re-embedding pass, and edits are picked up
+  promptly. Sources that don't expose a `signature()` fall back to the original
+  interval polling so no change is ever silently missed. Tests:
+  `test_live_mode_push_skips_run_when_sources_unchanged`,
+  `test_live_mode_push_reruns_when_file_modified`, and
+  `test_live_mode_push_reruns_when_file_deleted` in `tests/test_pipeline.py` —
+  suite now 169. This closes the last workflow gap; only the native-cocoindex
+  migration PoC remains.
+- **`full_reprocess` force-rebuild flag (POCKET-P6, cocoindex C5).** Mirrors
+  cocoindex's `App.update_blocking(full_reprocess=True)`: the new
+  `full_reprocess` keyword on `App.update_blocking` / `run_async` (surfaced as
+  `pocket update --full-reprocess`) sets a `_FULL_REPROCESS` contextvar that
+  makes `mount_each` bypass the memo fast-path, so every transform re-runs even
+  when its content+logic fingerprint is unchanged. This is the on-demand escape
+  hatch for changes the fingerprint can't observe (e.g. a schema/target-format
+  change). The per-row state-diff in the SQLite target (P4) still dedups physical
+  writes, so a clean rebuild re-executes the logic without duplicating or
+  churning rows, and pipeline state stays intact for the next incremental run.
+  In live mode only the initial catch-up pass is forced; later polls revert to
+  incremental. Tests: `test_full_reprocess_forces_rebuild_of_unchanged_files`
+  (engine) and `test_update_cli_threads_full_reprocess_flag` (CLI wiring) in
+  `tests/test_pipeline.py` — suite now 166. This closes the last cocoindex
+  *critical* (C-series) gap; the remaining workflow gap (W2 live-push) is closed
+  above, leaving only the native-cocoindex migration PoC.
+- **Logic-fingerprint memo keying (POCKET-P5, cocoindex C4).** The memo store was
+  already SQLite-backed (`_pocket_memo` / `_pocket_extract_memo`) and so already
+  survived process restarts — verified by `test_incremental_memoization`, which
+  rebuilds a fresh `App`/`TableTarget` on the same DB between runs. The genuine
+  remaining gap versus cocoindex (whose persistent memo is keyed by a *logic
+  fingerprint*) was that our memo key folded only source content and the embedding
+  signature: editing a transform's code (e.g. chunking/extraction) left unchanged
+  files skipped, silently serving output produced by the *old* code. `mount_each`
+  now computes `_logic_fingerprint(func)` once per run — `inspect.getsource`,
+  falling back to bytecode then qualified name, hashed via the cocoindex
+  fingerprint with a SHA-256 fallback — and folds it into every memo key
+  (alongside `POCKET_EMBED_SIG`) so a pipeline-code edit invalidates stale memos
+  and forces a clean reprocess. Tests: two new in `tests/test_pipeline.py`
+  (`test_logic_fingerprint_folds_into_memo_hash`, `test_logic_change_invalidates_memo`)
+  — suite now 164.
 - **State-diff delta writes in the SQLite target (POCKET-P4).** `TableTarget`
   previously re-UPSERTed *every* row a source re-emitted on reprocess and
   delete-reinserted its FTS5 companion row each time, so editing one paragraph of

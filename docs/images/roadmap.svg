@@ -28,6 +28,9 @@
     <linearGradient id="cp" x1="0" y1="0" x2="0" y2="1" gradientUnits="objectBoundingBox">
       <stop offset="0%" stop-color="#111827"/><stop offset="100%" stop-color="#0a0f1e"/>
     </linearGradient>
+    <linearGradient id="ci" x1="0" y1="0" x2="0" y2="1" gradientUnits="objectBoundingBox">
+      <stop offset="0%" stop-color="#431407"/><stop offset="100%" stop-color="#0c1a2e"/>
+    </linearGradient>
     <!-- Glow filters -->
     <filter id="fd" x="-50%" y="-50%" width="200%" height="200%">
       <feDropShadow dx="0" dy="0" stdDeviation="7" flood-color="#22c55e" flood-opacity="0.65"/>
@@ -56,103 +59,128 @@
 
   <!-- ══════ SECTION 1: cocoindex phases ══════ -->
   <rect x="28" y="48" width="1144" height="30" rx="6" fill="#0d1f35" stroke="#1e3a5f" stroke-width="1.2"/>
-  <text x="600" y="68" text-anchor="middle" font-size="11" font-weight="600" fill="#7dd3fc" letter-spacing="3">COCOINDEX  MIGRATION  PHASES  —  P0 → P6</text>
+  <text x="600" y="68" text-anchor="middle" font-size="11" font-weight="600" fill="#7dd3fc" letter-spacing="3">COCOINDEX  MIGRATION  PHASES  —  P0 → P8</text>
 
-  <!-- Timeline segments -->
-  <line x1="86" y1="128" x2="590" y2="128" stroke="#22c55e" stroke-width="2.5" opacity="0.75"/>
-  <line x1="590" y1="128" x2="758" y2="128" stroke="#f59e0b" stroke-width="2" stroke-dasharray="7,4" opacity="0.8"/>
-  <line x1="758" y1="128" x2="1094" y2="128" stroke="#4b5563" stroke-width="2" stroke-dasharray="7,4" opacity="0.55"/>
+  <!-- Timeline segments: P0..P7 done (green), P7..P8 in progress (orange dashed) -->
+  <line x1="92" y1="128" x2="981" y2="128" stroke="#22c55e" stroke-width="2.5" opacity="0.75"/>
+  <line x1="981" y1="128" x2="1108" y2="128" stroke="#f97316" stroke-width="2" stroke-dasharray="7,4" opacity="0.85"/>
 
   <!-- ── P0 done ── -->
-  <line x1="86" y1="147" x2="86" y2="154" stroke="#22c55e" stroke-width="1.5" opacity="0.65"/>
-  <circle cx="86" cy="128" r="18" fill="url(#gd)" filter="url(#fd)"/>
-  <text x="86" y="133" text-anchor="middle" font-size="10.5" font-weight="700" fill="#fff">P0</text>
-  <rect x="9" y="154" width="154" height="102" rx="8" fill="url(#cd)" stroke="#22c55e" stroke-width="1.3" filter="url(#fs)"/>
-  <rect x="11" y="155" width="4" height="86" rx="2" fill="#22c55e" opacity="0.65"/>
-  <text x="86" y="173" text-anchor="middle" font-size="10" font-weight="700" fill="#4ade80">Test Infra</text>
-  <text x="86" y="189" text-anchor="middle" font-size="8.5" fill="#86efac">MockEmbedder patch</text>
-  <text x="86" y="203" text-anchor="middle" font-size="8.5" fill="#86efac">169 tests · offline</text>
-  <text x="86" y="217" text-anchor="middle" font-size="8.5" fill="#86efac">run_tests.sh &lt; 10 s</text>
-  <rect x="36" y="231" width="100" height="16" rx="8" fill="#16a34a" opacity="0.85"/>
-  <text x="86" y="242" text-anchor="middle" font-size="8" font-weight="600" fill="#fff">&#x2705; done</text>
+  <line x1="92" y1="147" x2="92" y2="154" stroke="#22c55e" stroke-width="1.5" opacity="0.65"/>
+  <circle cx="92" cy="128" r="16" fill="url(#gd)" filter="url(#fd)"/>
+  <text x="92" y="132" text-anchor="middle" font-size="10" font-weight="700" fill="#fff">P0</text>
+  <rect x="33" y="154" width="118" height="102" rx="8" fill="url(#cd)" stroke="#22c55e" stroke-width="1.3" filter="url(#fs)"/>
+  <rect x="35" y="155" width="4" height="86" rx="2" fill="#22c55e" opacity="0.65"/>
+  <text x="92" y="174" text-anchor="middle" font-size="9.5" font-weight="700" fill="#4ade80">Test Infra</text>
+  <text x="92" y="190" text-anchor="middle" font-size="8" fill="#86efac">MockEmbedder patch</text>
+  <text x="92" y="204" text-anchor="middle" font-size="8" fill="#86efac">169 tests · offline</text>
+  <text x="92" y="218" text-anchor="middle" font-size="8" fill="#86efac">run_tests.sh &lt; 10 s</text>
+  <rect x="52" y="231" width="80" height="16" rx="8" fill="#16a34a" opacity="0.85"/>
+  <text x="92" y="242" text-anchor="middle" font-size="8" font-weight="600" fill="#fff">&#x2705; done</text>
 
   <!-- ── P1 done ── -->
-  <line x1="254" y1="147" x2="254" y2="154" stroke="#22c55e" stroke-width="1.5" opacity="0.65"/>
-  <circle cx="254" cy="128" r="18" fill="url(#gd)" filter="url(#fd)"/>
-  <text x="254" y="133" text-anchor="middle" font-size="10.5" font-weight="700" fill="#fff">P1</text>
-  <rect x="177" y="154" width="154" height="102" rx="8" fill="url(#cd)" stroke="#22c55e" stroke-width="1.3" filter="url(#fs)"/>
-  <rect x="179" y="155" width="4" height="86" rx="2" fill="#22c55e" opacity="0.65"/>
-  <text x="254" y="173" text-anchor="middle" font-size="10" font-weight="700" fill="#4ade80">Fingerprinting</text>
-  <text x="254" y="189" text-anchor="middle" font-size="8.5" fill="#86efac">cocoindex.connectorkits</text>
-  <text x="254" y="203" text-anchor="middle" font-size="8.5" fill="#86efac">.fingerprint module</text>
-  <text x="254" y="217" text-anchor="middle" font-size="8.5" fill="#86efac">replaces SHA-256</text>
-  <rect x="204" y="231" width="100" height="16" rx="8" fill="#16a34a" opacity="0.85"/>
-  <text x="254" y="242" text-anchor="middle" font-size="8" font-weight="600" fill="#fff">&#x2705; done</text>
+  <line x1="219" y1="147" x2="219" y2="154" stroke="#22c55e" stroke-width="1.5" opacity="0.65"/>
+  <circle cx="219" cy="128" r="16" fill="url(#gd)" filter="url(#fd)"/>
+  <text x="219" y="132" text-anchor="middle" font-size="10" font-weight="700" fill="#fff">P1</text>
+  <rect x="160" y="154" width="118" height="102" rx="8" fill="url(#cd)" stroke="#22c55e" stroke-width="1.3" filter="url(#fs)"/>
+  <rect x="162" y="155" width="4" height="86" rx="2" fill="#22c55e" opacity="0.65"/>
+  <text x="219" y="174" text-anchor="middle" font-size="9.5" font-weight="700" fill="#4ade80">Fingerprinting</text>
+  <text x="219" y="190" text-anchor="middle" font-size="8" fill="#86efac">connectorkits</text>
+  <text x="219" y="204" text-anchor="middle" font-size="8" fill="#86efac">.fingerprint hash</text>
+  <text x="219" y="218" text-anchor="middle" font-size="8" fill="#86efac">replaces SHA-256</text>
+  <rect x="179" y="231" width="80" height="16" rx="8" fill="#16a34a" opacity="0.85"/>
+  <text x="219" y="242" text-anchor="middle" font-size="8" font-weight="600" fill="#fff">&#x2705; done</text>
 
   <!-- ── P2 done ── -->
-  <line x1="422" y1="147" x2="422" y2="154" stroke="#22c55e" stroke-width="1.5" opacity="0.65"/>
-  <circle cx="422" cy="128" r="18" fill="url(#gd)" filter="url(#fd)"/>
-  <text x="422" y="133" text-anchor="middle" font-size="10.5" font-weight="700" fill="#fff">P2</text>
-  <rect x="345" y="154" width="154" height="102" rx="8" fill="url(#cd)" stroke="#22c55e" stroke-width="1.3" filter="url(#fs)"/>
-  <rect x="347" y="155" width="4" height="86" rx="2" fill="#22c55e" opacity="0.65"/>
-  <text x="422" y="173" text-anchor="middle" font-size="10" font-weight="700" fill="#4ade80">Concurrent map()</text>
-  <text x="422" y="189" text-anchor="middle" font-size="8.5" fill="#86efac">asyncio.gather</text>
-  <text x="422" y="203" text-anchor="middle" font-size="8.5" fill="#86efac">replaces seq. loop</text>
-  <text x="422" y="217" text-anchor="middle" font-size="8.5" fill="#86efac">cocoindex contract</text>
-  <rect x="372" y="231" width="100" height="16" rx="8" fill="#16a34a" opacity="0.85"/>
-  <text x="422" y="242" text-anchor="middle" font-size="8" font-weight="600" fill="#fff">&#x2705; done</text>
+  <line x1="346" y1="147" x2="346" y2="154" stroke="#22c55e" stroke-width="1.5" opacity="0.65"/>
+  <circle cx="346" cy="128" r="16" fill="url(#gd)" filter="url(#fd)"/>
+  <text x="346" y="132" text-anchor="middle" font-size="10" font-weight="700" fill="#fff">P2</text>
+  <rect x="287" y="154" width="118" height="102" rx="8" fill="url(#cd)" stroke="#22c55e" stroke-width="1.3" filter="url(#fs)"/>
+  <rect x="289" y="155" width="4" height="86" rx="2" fill="#22c55e" opacity="0.65"/>
+  <text x="346" y="174" text-anchor="middle" font-size="9.5" font-weight="700" fill="#4ade80">Concurrent map()</text>
+  <text x="346" y="190" text-anchor="middle" font-size="8" fill="#86efac">asyncio.gather</text>
+  <text x="346" y="204" text-anchor="middle" font-size="8" fill="#86efac">replaces seq. loop</text>
+  <text x="346" y="218" text-anchor="middle" font-size="8" fill="#86efac">cocoindex contract</text>
+  <rect x="306" y="231" width="80" height="16" rx="8" fill="#16a34a" opacity="0.85"/>
+  <text x="346" y="242" text-anchor="middle" font-size="8" font-weight="600" fill="#fff">&#x2705; done</text>
 
   <!-- ── P3 done ── -->
-  <line x1="590" y1="147" x2="590" y2="154" stroke="#22c55e" stroke-width="1.5" opacity="0.65"/>
-  <circle cx="590" cy="128" r="18" fill="url(#gd)" filter="url(#fd)"/>
-  <text x="590" y="133" text-anchor="middle" font-size="10.5" font-weight="700" fill="#fff">P3</text>
-  <rect x="513" y="154" width="154" height="102" rx="8" fill="url(#cd)" stroke="#22c55e" stroke-width="1.3" filter="url(#fs)"/>
-  <rect x="515" y="155" width="4" height="86" rx="2" fill="#22c55e" opacity="0.65"/>
-  <text x="590" y="173" text-anchor="middle" font-size="10" font-weight="700" fill="#4ade80">list_concepts MCP</text>
-  <text x="590" y="189" text-anchor="middle" font-size="8.5" fill="#86efac">live graph query</text>
-  <text x="590" y="203" text-anchor="middle" font-size="8.5" fill="#86efac">list_graph_concepts()</text>
-  <text x="590" y="217" text-anchor="middle" font-size="8.5" fill="#86efac">POCKET_GRAPH=1</text>
-  <rect x="540" y="231" width="100" height="16" rx="8" fill="#16a34a" opacity="0.85"/>
-  <text x="590" y="242" text-anchor="middle" font-size="8" font-weight="600" fill="#fff">&#x2705; done</text>
+  <line x1="473" y1="147" x2="473" y2="154" stroke="#22c55e" stroke-width="1.5" opacity="0.65"/>
+  <circle cx="473" cy="128" r="16" fill="url(#gd)" filter="url(#fd)"/>
+  <text x="473" y="132" text-anchor="middle" font-size="10" font-weight="700" fill="#fff">P3</text>
+  <rect x="414" y="154" width="118" height="102" rx="8" fill="url(#cd)" stroke="#22c55e" stroke-width="1.3" filter="url(#fs)"/>
+  <rect x="416" y="155" width="4" height="86" rx="2" fill="#22c55e" opacity="0.65"/>
+  <text x="473" y="174" text-anchor="middle" font-size="9.5" font-weight="700" fill="#4ade80">list_concepts MCP</text>
+  <text x="473" y="190" text-anchor="middle" font-size="8" fill="#86efac">live graph query</text>
+  <text x="473" y="204" text-anchor="middle" font-size="8" fill="#86efac">list_graph_concepts()</text>
+  <text x="473" y="218" text-anchor="middle" font-size="8" fill="#86efac">POCKET_GRAPH=1</text>
+  <rect x="433" y="231" width="80" height="16" rx="8" fill="#16a34a" opacity="0.85"/>
+  <text x="473" y="242" text-anchor="middle" font-size="8" font-weight="600" fill="#fff">&#x2705; done</text>
 
   <!-- ── P4 done ── -->
-  <line x1="758" y1="147" x2="758" y2="154" stroke="#22c55e" stroke-width="1.5" opacity="0.65"/>
-  <circle cx="758" cy="128" r="18" fill="url(#gd)" filter="url(#fd)"/>
-  <text x="758" y="133" text-anchor="middle" font-size="10.5" font-weight="700" fill="#fff">P4</text>
-  <rect x="681" y="154" width="154" height="102" rx="8" fill="url(#cd)" stroke="#22c55e" stroke-width="1.3" filter="url(#fs)"/>
-  <rect x="683" y="155" width="4" height="86" rx="2" fill="#22c55e" opacity="0.65"/>
-  <text x="758" y="173" text-anchor="middle" font-size="10" font-weight="700" fill="#4ade80">State-diff &#x0394; writes</text>
-  <text x="758" y="189" text-anchor="middle" font-size="8.5" fill="#86efac">statediff.diff per row</text>
-  <text x="758" y="203" text-anchor="middle" font-size="8.5" fill="#86efac">insert / replace / skip</text>
-  <text x="758" y="217" text-anchor="middle" font-size="8.5" fill="#86efac">row_writes / row_skips</text>
-  <rect x="706" y="231" width="104" height="16" rx="8" fill="#16a34a" opacity="0.85"/>
-  <text x="758" y="242" text-anchor="middle" font-size="8" font-weight="600" fill="#fff">&#x2705; done</text>
+  <line x1="600" y1="147" x2="600" y2="154" stroke="#22c55e" stroke-width="1.5" opacity="0.65"/>
+  <circle cx="600" cy="128" r="16" fill="url(#gd)" filter="url(#fd)"/>
+  <text x="600" y="132" text-anchor="middle" font-size="10" font-weight="700" fill="#fff">P4</text>
+  <rect x="541" y="154" width="118" height="102" rx="8" fill="url(#cd)" stroke="#22c55e" stroke-width="1.3" filter="url(#fs)"/>
+  <rect x="543" y="155" width="4" height="86" rx="2" fill="#22c55e" opacity="0.65"/>
+  <text x="600" y="174" text-anchor="middle" font-size="9.5" font-weight="700" fill="#4ade80">State-diff &#x0394; writes</text>
+  <text x="600" y="190" text-anchor="middle" font-size="8" fill="#86efac">statediff.diff per row</text>
+  <text x="600" y="204" text-anchor="middle" font-size="8" fill="#86efac">insert / replace / skip</text>
+  <text x="600" y="218" text-anchor="middle" font-size="8" fill="#86efac">row_writes / skips</text>
+  <rect x="560" y="231" width="80" height="16" rx="8" fill="#16a34a" opacity="0.85"/>
+  <text x="600" y="242" text-anchor="middle" font-size="8" font-weight="600" fill="#fff">&#x2705; done</text>
 
   <!-- ── P5 done ── -->
-  <line x1="926" y1="147" x2="926" y2="154" stroke="#22c55e" stroke-width="1.5" opacity="0.65"/>
-  <circle cx="926" cy="128" r="18" fill="url(#gd)" filter="url(#fd)"/>
-  <text x="926" y="133" text-anchor="middle" font-size="10.5" font-weight="700" fill="#fff">P5</text>
-  <rect x="849" y="154" width="154" height="102" rx="8" fill="url(#cd)" stroke="#22c55e" stroke-width="1.3" filter="url(#fs)"/>
-  <rect x="851" y="155" width="4" height="86" rx="2" fill="#22c55e" opacity="0.65"/>
-  <text x="926" y="173" text-anchor="middle" font-size="10" font-weight="700" fill="#4ade80">Logic-fp Memo</text>
-  <text x="926" y="189" text-anchor="middle" font-size="8.5" fill="#86efac">memo already</text>
-  <text x="926" y="203" text-anchor="middle" font-size="8.5" fill="#86efac">SQLite-persistent</text>
-  <text x="926" y="217" text-anchor="middle" font-size="8.5" fill="#86efac">logic fp invalidates</text>
-  <rect x="872" y="231" width="108" height="16" rx="8" fill="#16a34a" opacity="0.85"/>
-  <text x="926" y="242" text-anchor="middle" font-size="8" font-weight="600" fill="#fff">&#x2705; done</text>
+  <line x1="727" y1="147" x2="727" y2="154" stroke="#22c55e" stroke-width="1.5" opacity="0.65"/>
+  <circle cx="727" cy="128" r="16" fill="url(#gd)" filter="url(#fd)"/>
+  <text x="727" y="132" text-anchor="middle" font-size="10" font-weight="700" fill="#fff">P5</text>
+  <rect x="668" y="154" width="118" height="102" rx="8" fill="url(#cd)" stroke="#22c55e" stroke-width="1.3" filter="url(#fs)"/>
+  <rect x="670" y="155" width="4" height="86" rx="2" fill="#22c55e" opacity="0.65"/>
+  <text x="727" y="174" text-anchor="middle" font-size="9.5" font-weight="700" fill="#4ade80">Logic-fp Memo</text>
+  <text x="727" y="190" text-anchor="middle" font-size="8" fill="#86efac">SQLite-persistent</text>
+  <text x="727" y="204" text-anchor="middle" font-size="8" fill="#86efac">logic fp in memo key</text>
+  <text x="727" y="218" text-anchor="middle" font-size="8" fill="#86efac">invalidates stale</text>
+  <rect x="687" y="231" width="80" height="16" rx="8" fill="#16a34a" opacity="0.85"/>
+  <text x="727" y="242" text-anchor="middle" font-size="8" font-weight="600" fill="#fff">&#x2705; done</text>
 
   <!-- ── P6 done ── -->
-  <line x1="1094" y1="147" x2="1094" y2="154" stroke="#22c55e" stroke-width="1.5" opacity="0.65"/>
-  <circle cx="1094" cy="128" r="18" fill="url(#gd)" filter="url(#fd)"/>
-  <text x="1094" y="133" text-anchor="middle" font-size="10.5" font-weight="700" fill="#fff">P6</text>
-  <rect x="1017" y="154" width="154" height="102" rx="8" fill="url(#cd)" stroke="#22c55e" stroke-width="1.3" filter="url(#fs)"/>
-  <rect x="1019" y="155" width="4" height="86" rx="2" fill="#22c55e" opacity="0.65"/>
-  <text x="1094" y="173" text-anchor="middle" font-size="10" font-weight="700" fill="#4ade80">full_reprocess</text>
-  <text x="1094" y="189" text-anchor="middle" font-size="8.5" fill="#86efac">force clean rebuild</text>
-  <text x="1094" y="203" text-anchor="middle" font-size="8.5" fill="#86efac">bypasses memo path</text>
-  <text x="1094" y="217" text-anchor="middle" font-size="8.5" fill="#86efac">--full-reprocess</text>
-  <rect x="1040" y="231" width="108" height="16" rx="8" fill="#16a34a" opacity="0.85"/>
-  <text x="1094" y="242" text-anchor="middle" font-size="8" font-weight="600" fill="#fff">&#x2705; done</text>
+  <line x1="854" y1="147" x2="854" y2="154" stroke="#22c55e" stroke-width="1.5" opacity="0.65"/>
+  <circle cx="854" cy="128" r="16" fill="url(#gd)" filter="url(#fd)"/>
+  <text x="854" y="132" text-anchor="middle" font-size="10" font-weight="700" fill="#fff">P6</text>
+  <rect x="795" y="154" width="118" height="102" rx="8" fill="url(#cd)" stroke="#22c55e" stroke-width="1.3" filter="url(#fs)"/>
+  <rect x="797" y="155" width="4" height="86" rx="2" fill="#22c55e" opacity="0.65"/>
+  <text x="854" y="174" text-anchor="middle" font-size="9.5" font-weight="700" fill="#4ade80">full_reprocess</text>
+  <text x="854" y="190" text-anchor="middle" font-size="8" fill="#86efac">force clean rebuild</text>
+  <text x="854" y="204" text-anchor="middle" font-size="8" fill="#86efac">bypasses memo path</text>
+  <text x="854" y="218" text-anchor="middle" font-size="8" fill="#86efac">--full-reprocess</text>
+  <rect x="814" y="231" width="80" height="16" rx="8" fill="#16a34a" opacity="0.85"/>
+  <text x="854" y="242" text-anchor="middle" font-size="8" font-weight="600" fill="#fff">&#x2705; done</text>
+
+  <!-- ── P7 done ── -->
+  <line x1="981" y1="147" x2="981" y2="154" stroke="#22c55e" stroke-width="1.5" opacity="0.65"/>
+  <circle cx="981" cy="128" r="16" fill="url(#gd)" filter="url(#fd)"/>
+  <text x="981" y="132" text-anchor="middle" font-size="10" font-weight="700" fill="#fff">P7</text>
+  <rect x="922" y="154" width="118" height="102" rx="8" fill="url(#cd)" stroke="#22c55e" stroke-width="1.3" filter="url(#fs)"/>
+  <rect x="924" y="155" width="4" height="86" rx="2" fill="#22c55e" opacity="0.65"/>
+  <text x="981" y="174" text-anchor="middle" font-size="9.5" font-weight="700" fill="#4ade80">Live-mode push</text>
+  <text x="981" y="190" text-anchor="middle" font-size="8" fill="#86efac">change-driven index</text>
+  <text x="981" y="204" text-anchor="middle" font-size="8" fill="#86efac">register_source +</text>
+  <text x="981" y="218" text-anchor="middle" font-size="8" fill="#86efac">signature() stat map</text>
+  <rect x="941" y="231" width="80" height="16" rx="8" fill="#16a34a" opacity="0.85"/>
+  <text x="981" y="242" text-anchor="middle" font-size="8" font-weight="600" fill="#fff">&#x2705; done</text>
+
+  <!-- ── P8 in progress ── -->
+  <line x1="1108" y1="147" x2="1108" y2="154" stroke="#f97316" stroke-width="1.5" opacity="0.7"/>
+  <circle cx="1108" cy="128" r="16" fill="url(#gi)" filter="url(#fi)"/>
+  <text x="1108" y="132" text-anchor="middle" font-size="10" font-weight="700" fill="#fff">P8</text>
+  <rect x="1049" y="154" width="118" height="102" rx="8" fill="url(#ci)" stroke="#f97316" stroke-width="1.3" filter="url(#fs)"/>
+  <rect x="1051" y="155" width="4" height="86" rx="2" fill="#f97316" opacity="0.7"/>
+  <text x="1108" y="174" text-anchor="middle" font-size="9.5" font-weight="700" fill="#fdba74">Native cocoindex</text>
+  <text x="1108" y="190" text-anchor="middle" font-size="8" fill="#fed7aa">pipeline_native.py</text>
+  <text x="1108" y="204" text-anchor="middle" font-size="8" fill="#fed7aa">real coco ops wired</text>
+  <text x="1108" y="218" text-anchor="middle" font-size="8" fill="#fed7aa">POCKET_PIPELINE=native</text>
+  <rect x="1062" y="231" width="92" height="16" rx="8" fill="#ea580c" opacity="0.9"/>
+  <text x="1108" y="242" text-anchor="middle" font-size="8" font-weight="600" fill="#fff">&#x1F6A7; in progress</text>
 
   <!-- ══════ SECTION 2: 2026 SOTA ══════ -->
   <rect x="28" y="270" width="1144" height="30" rx="6" fill="#0d1f35" stroke="#1e3a5f" stroke-width="1.2"/>
@@ -246,16 +274,14 @@
   <rect x="28" y="558" width="1144" height="42" rx="6" fill="#0a0f1e" stroke="#1e3a5f" stroke-width="1" opacity="0.9"/>
   <circle cx="72"  cy="579" r="7" fill="url(#gd)" filter="url(#fd)"/>
   <text x="87"  y="583" font-size="9.5" fill="#4ade80">&#x2705; done</text>
-  <circle cx="165" cy="579" r="7" fill="url(#gn)" filter="url(#fn)"/>
-  <text x="180" y="583" font-size="9.5" fill="#fcd34d">&#x23F3; next</text>
-  <circle cx="258" cy="579" r="7" fill="url(#gp)" filter="url(#fp)"/>
-  <text x="273" y="583" font-size="9.5" fill="#9ca3af">&#x23F3; planned</text>
-  <circle cx="375" cy="579" r="7" fill="url(#gi)" filter="url(#fi)"/>
-  <text x="390" y="583" font-size="9.5" fill="#fb923c">&#x1F6A7; in progress</text>
-  <rect x="505" y="571" width="22" height="15" rx="7" fill="#f59e0b"/>
-  <text x="516" y="582" text-anchor="middle" font-size="9" font-weight="700" fill="#000">&#x26A1;</text>
-  <text x="534" y="583" font-size="9.5" fill="#fde68a">SOTA opt-in feature</text>
-  <text x="900" y="583" text-anchor="middle" font-size="9" fill="#475569">docs/architecture/cocoindex-gap.md</text>
+  <circle cx="240" cy="579" r="7" fill="url(#gi)" filter="url(#fi)"/>
+  <text x="255" y="583" font-size="9.5" fill="#fb923c">&#x1F6A7; in progress</text>
+  <circle cx="400" cy="579" r="7" fill="url(#gp)" filter="url(#fp)"/>
+  <text x="415" y="583" font-size="9.5" fill="#9ca3af">&#x23F3; planned</text>
+  <rect x="540" y="571" width="22" height="15" rx="7" fill="#f59e0b"/>
+  <text x="551" y="582" text-anchor="middle" font-size="9" font-weight="700" fill="#000">&#x26A1;</text>
+  <text x="569" y="583" font-size="9.5" fill="#fde68a">SOTA opt-in feature</text>
+  <text x="950" y="583" text-anchor="middle" font-size="9" fill="#475569">docs/architecture/cocoindex-gap.md</text>
 
   <!-- footer line -->
   <text x="600" y="618" text-anchor="middle" font-size="8.5" fill="#334155">genome-pocket · 2026 · vector SVG — zoom freely</text>

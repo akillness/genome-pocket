@@ -1,168 +1,287 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 620" width="100%" height="100%" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif">
-  <defs>
-    <linearGradient id="g-source" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#4F46E5" /><stop offset="100%" stop-color="#7C3AED" />
-    </linearGradient>
-    <linearGradient id="g-refine" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#0EA5E9" /><stop offset="100%" stop-color="#38BDF8" />
-    </linearGradient>
-    <linearGradient id="g-transform" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#2563EB" /><stop offset="100%" stop-color="#3B82F6" />
-    </linearGradient>
-    <linearGradient id="g-load" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#059669" /><stop offset="100%" stop-color="#10B981" />
-    </linearGradient>
-    <linearGradient id="g-serve" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#D97706" /><stop offset="100%" stop-color="#F59E0B" />
-    </linearGradient>
-    <linearGradient id="g-graph" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#9333EA" /><stop offset="100%" stop-color="#C026D3" />
-    </linearGradient>
-    <filter id="shadow" x="-12%" y="-12%" width="124%" height="124%">
-      <feDropShadow dx="0" dy="3" stdDeviation="5" flood-color="#000000" flood-opacity="0.12" />
-    </filter>
-    <marker id="arrow" viewBox="0 0 10 10" refX="6" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-      <path d="M 0 1.5 L 8 5 L 0 8.5 z" fill="#475569" />
-    </marker>
-  </defs>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 720" width="100%" font-family="'Segoe UI',system-ui,-apple-system,Roboto,sans-serif">
+<defs>
+  <linearGradient id="a-bg"  x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#0F172A"/><stop offset="100%" stop-color="#1E293B"/></linearGradient>
+  <linearGradient id="a-src" x1="0%" y1="0%" x2="0%" y2="100%"><stop offset="0%" stop-color="#4338CA"/><stop offset="100%" stop-color="#6D28D9"/></linearGradient>
+  <linearGradient id="a-ref" x1="0%" y1="0%" x2="0%" y2="100%"><stop offset="0%" stop-color="#075985"/><stop offset="100%" stop-color="#0284C7"/></linearGradient>
+  <linearGradient id="a-xf"  x1="0%" y1="0%" x2="0%" y2="100%"><stop offset="0%" stop-color="#1E3A8A"/><stop offset="100%" stop-color="#2563EB"/></linearGradient>
+  <linearGradient id="a-ld"  x1="0%" y1="0%" x2="0%" y2="100%"><stop offset="0%" stop-color="#064E3B"/><stop offset="100%" stop-color="#059669"/></linearGradient>
+  <linearGradient id="a-sv"  x1="0%" y1="0%" x2="0%" y2="100%"><stop offset="0%" stop-color="#78350F"/><stop offset="100%" stop-color="#B45309"/></linearGradient>
+  <linearGradient id="a-gr"  x1="0%" y1="0%" x2="100%" y2="0%"><stop offset="0%" stop-color="#4C1D95"/><stop offset="100%" stop-color="#7C3AED"/></linearGradient>
+  <linearGradient id="a-ev"  x1="0%" y1="0%" x2="100%" y2="0%"><stop offset="0%" stop-color="#0F2044"/><stop offset="100%" stop-color="#1E3A8A"/></linearGradient>
 
-  <rect width="100%" height="100%" fill="#F8FAFC" rx="18" />
+  <filter id="a-shadow" x="-10%" y="-10%" width="120%" height="120%">
+    <feDropShadow dx="0" dy="4" stdDeviation="8" flood-color="#000" flood-opacity="0.55"/>
+  </filter>
+  <filter id="a-glow-sota" x="-28%" y="-28%" width="156%" height="156%">
+    <feGaussianBlur stdDeviation="4" result="b"/>
+    <feMerge><feMergeNode in="b"/><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+  </filter>
+  <filter id="a-glow-title" x="-4%" y="-30%" width="108%" height="160%">
+    <feGaussianBlur stdDeviation="2.5" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+  </filter>
+  <filter id="a-glow-box" x="-6%" y="-6%" width="112%" height="112%">
+    <feGaussianBlur stdDeviation="5" result="b"/>
+    <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+  </filter>
 
-  <text x="500" y="42" text-anchor="middle" font-size="25" font-weight="bold" fill="#0F172A">🧬 Pocket Knowledge Ops — Target = F(Source)</text>
-  <text x="500" y="68" text-anchor="middle" font-size="14" fill="#64748B">Declarative · Incremental (Δ-only) · Local-First · Source → Refine → Transform → Load → Serve</text>
+  <marker id="a-arr"  viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 2L9 5L0 8Z" fill="#94A3B8"/></marker>
+  <marker id="a-arr-gr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 2L9 5L0 8Z" fill="#9333EA"/></marker>
+  <marker id="a-arr-ev" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 2L9 5L0 8Z" fill="#60A5FA"/></marker>
+  <marker id="a-arr-sota" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 2L9 5L0 8Z" fill="#F59E0B"/></marker>
 
-  <!-- ===== 1. Source ===== -->
-  <g transform="translate(20, 100)" filter="url(#shadow)">
-    <rect width="176" height="300" rx="12" fill="url(#g-source)" />
-    <text x="88" y="32" text-anchor="middle" font-size="15" font-weight="bold" fill="#FFFFFF">1 · Source</text>
-    <text x="88" y="50" text-anchor="middle" font-size="10" fill="#E0E7FF">LocalFS connector</text>
-    <g transform="translate(16, 66)">
-      <rect width="144" height="52" rx="8" fill="#FFFFFF" fill-opacity="0.16" stroke="#FFFFFF" stroke-opacity="0.5" />
-      <text x="72" y="22" text-anchor="middle" font-size="11" font-weight="600" fill="#FFFFFF">notes/*.md, *.txt</text>
-      <text x="72" y="39" text-anchor="middle" font-size="9" fill="#E0E7FF">Markdown / prose</text>
-    </g>
-    <g transform="translate(16, 130)">
-      <rect width="144" height="52" rx="8" fill="#FFFFFF" fill-opacity="0.16" stroke="#FFFFFF" stroke-opacity="0.5" />
-      <text x="72" y="22" text-anchor="middle" font-size="11" font-weight="600" fill="#FFFFFF">code: .py .rs .ts</text>
-      <text x="72" y="39" text-anchor="middle" font-size="9" fill="#E0E7FF">.js .go .java …</text>
-    </g>
-    <g transform="translate(16, 222)">
-      <rect width="144" height="52" rx="8" fill="#4338CA" />
-      <text x="72" y="22" text-anchor="middle" font-size="11" font-weight="bold" fill="#FFFFFF">File Watcher</text>
-      <text x="72" y="39" text-anchor="middle" font-size="9" fill="#C7D2FE">Live mode · Δ-only</text>
-    </g>
+  <pattern id="a-dots" x="0" y="0" width="24" height="24" patternUnits="userSpaceOnUse">
+    <circle cx="12" cy="12" r="1" fill="#334155" fill-opacity="0.5"/>
+  </pattern>
+</defs>
+
+<!-- ─── Background ─────────────────────────────────────────── -->
+<rect width="100%" height="100%" fill="url(#a-bg)" rx="16"/>
+<rect width="100%" height="100%" fill="url(#a-dots)" rx="16"/>
+
+<!-- ─── Title ──────────────────────────────────────────────── -->
+<rect x="16" y="11" width="1168" height="52" rx="10" fill="#1E293B" fill-opacity="0.9" stroke="#334155" stroke-width="0.8"/>
+<text x="600" y="32" text-anchor="middle" font-size="21" font-weight="bold" fill="#F1F5F9" filter="url(#a-glow-title)">🧬 genome-pocket · Target = F(Source)</text>
+<text x="600" y="54" text-anchor="middle" font-size="11" fill="#64748B">Declarative · Incremental (Δ-only) · Local-First  ·  Source → Refine → Transform → Load → Serve  ·  ⚡ = 2026 SOTA (opt-in)</text>
+
+<!-- ═══════════════════════════════════════════════════════════
+     STAGE COLUMNS   y=74..434  h=360
+     x: SRC=16  REF=226  XF=436  LOAD=646  SERVE=856
+     w: 190 each (gap=20)  SERVE w=320
+     ═══════════════════════════════════════════════════════════ -->
+
+<!-- 1 · SOURCE ──────────────────────────────────────────────── -->
+<g transform="translate(16,74)" filter="url(#a-shadow)">
+  <rect width="190" height="360" rx="12" fill="url(#a-src)" stroke="#818CF8" stroke-width="1"/>
+  <rect width="190" height="42" rx="12" fill="#312E81" fill-opacity="0.65"/>
+  <text x="95" y="20" text-anchor="middle" font-size="13" font-weight="bold" fill="#EEF2FF">1 · Source</text>
+  <text x="95" y="35" text-anchor="middle" font-size="9" fill="#C7D2FE">LocalFS connector</text>
+  <!-- MD -->
+  <rect x="12" y="54" width="166" height="50" rx="8" fill="#FFF" fill-opacity="0.1" stroke="#A5B4FC" stroke-opacity="0.4" stroke-width="0.8"/>
+  <text x="95" y="75" text-anchor="middle" font-size="10.5" font-weight="600" fill="#EDE9FE">notes/*.md · *.txt</text>
+  <text x="95" y="91" text-anchor="middle" font-size="9" fill="#C4B5FD">Markdown / prose</text>
+  <!-- CODE -->
+  <rect x="12" y="116" width="166" height="50" rx="8" fill="#FFF" fill-opacity="0.1" stroke="#A5B4FC" stroke-opacity="0.4" stroke-width="0.8"/>
+  <text x="95" y="137" text-anchor="middle" font-size="10.5" font-weight="600" fill="#EDE9FE">code: .py .rs .ts</text>
+  <text x="95" y="153" text-anchor="middle" font-size="9" fill="#C4B5FD">.js .go .java …</text>
+  <!-- WATCH -->
+  <rect x="12" y="178" width="166" height="50" rx="8" fill="#3730A3" fill-opacity="0.8"/>
+  <text x="95" y="199" text-anchor="middle" font-size="10.5" font-weight="bold" fill="#FFF">File Watcher</text>
+  <text x="95" y="215" text-anchor="middle" font-size="9" fill="#C7D2FE">live · Δ-only</text>
+  <!-- Image opt-in -->
+  <rect x="12" y="240" width="166" height="42" rx="8" fill="#FFF" fill-opacity="0.05" stroke="#818CF8" stroke-opacity="0.35" stroke-dasharray="4 3" stroke-width="0.8"/>
+  <text x="95" y="259" text-anchor="middle" font-size="9" font-style="italic" fill="#A5B4FC">opt-in: images</text>
+  <text x="95" y="274" text-anchor="middle" font-size="8.5" fill="#818CF8">.png .jpg .webp · SigLIP2</text>
+  <text x="95" y="348" text-anchor="middle" font-size="8.5" fill="#818CF8" fill-opacity="0.7">watches · fingerprints · Δ-only</text>
+</g>
+
+<!-- 2 · REFINE ──────────────────────────────────────────────── -->
+<g transform="translate(226,74)" filter="url(#a-shadow)">
+  <rect width="190" height="360" rx="12" fill="url(#a-ref)" stroke="#38BDF8" stroke-width="1"/>
+  <rect width="190" height="42" rx="12" fill="#0C4A6E" fill-opacity="0.65"/>
+  <text x="95" y="20" text-anchor="middle" font-size="13" font-weight="bold" fill="#E0F2FE">2 · Refine</text>
+  <text x="95" y="35" text-anchor="middle" font-size="9" fill="#BAE6FD">TextRefiner</text>
+  <!-- NORM -->
+  <rect x="12" y="54" width="166" height="76" rx="8" fill="#FFF" fill-opacity="0.1" stroke="#7DD3FC" stroke-opacity="0.4" stroke-width="0.8"/>
+  <text x="95" y="74" text-anchor="middle" font-size="10.5" font-weight="600" fill="#E0F2FE">Normalize</text>
+  <text x="95" y="90" text-anchor="middle" font-size="9" fill="#BAE6FD">NFC · CRLF→LF</text>
+  <text x="95" y="105" text-anchor="middle" font-size="9" fill="#BAE6FD">whitespace · blank lines</text>
+  <text x="95" y="120" text-anchor="middle" font-size="9" fill="#7DD3FC" fill-opacity="0.85">indent-preserving for code</text>
+  <!-- OFF -->
+  <rect x="12" y="142" width="166" height="62" rx="8" fill="#FFF" fill-opacity="0.1" stroke="#7DD3FC" stroke-opacity="0.4" stroke-width="0.8"/>
+  <text x="95" y="162" text-anchor="middle" font-size="10.5" font-weight="600" fill="#E0F2FE">Offset map</text>
+  <text x="95" y="178" text-anchor="middle" font-size="9" fill="#BAE6FD">lineage → original bytes</text>
+  <text x="95" y="194" text-anchor="middle" font-size="8.5" fill="#7DD3FC" fill-opacity="0.85">preserves chunk provenance</text>
+  <!-- notes -->
+  <text x="95" y="234" text-anchor="middle" font-size="9" fill="#38BDF8" fill-opacity="0.75">content fingerprint</text>
+  <text x="95" y="249" text-anchor="middle" font-size="9" fill="#38BDF8" fill-opacity="0.75">unchanged files skip reindex</text>
+  <text x="95" y="348" text-anchor="middle" font-size="8.5" fill="#38BDF8" fill-opacity="0.6">normalize · lineage · memo</text>
+</g>
+
+<!-- 3 · TRANSFORM ───────────────────────────────────────────── -->
+<g transform="translate(436,74)" filter="url(#a-shadow)">
+  <rect width="190" height="360" rx="12" fill="url(#a-xf)" stroke="#60A5FA" stroke-width="1"/>
+  <rect width="190" height="42" rx="12" fill="#1E3A8A" fill-opacity="0.65"/>
+  <text x="95" y="20" text-anchor="middle" font-size="13" font-weight="bold" fill="#DBEAFE">3 · Transform</text>
+  <text x="95" y="35" text-anchor="middle" font-size="9" fill="#BFDBFE">PocketIndex ETL</text>
+  <!-- SPLIT -->
+  <rect x="12" y="54" width="166" height="46" rx="8" fill="#FFF" fill-opacity="0.1" stroke="#93C5FD" stroke-opacity="0.4" stroke-width="0.8"/>
+  <text x="95" y="74" text-anchor="middle" font-size="10.5" font-weight="600" fill="#DBEAFE">RecursiveSplitter</text>
+  <text x="95" y="90" text-anchor="middle" font-size="9" fill="#93C5FD">code-aware · lang detect</text>
+  <!-- dashed opt-in path to SemanticSplitter -->
+  <path d="M 95 100 L 95 111" stroke="#F59E0B" stroke-width="1.2" stroke-dasharray="3 2" fill="none" marker-end="url(#a-arr-sota)"/>
+  <!-- SEMSPLIT SOTA -->
+  <g filter="url(#a-glow-sota)">
+    <rect x="12" y="111" width="166" height="56" rx="8" fill="#1C1917" stroke="#F59E0B" stroke-width="1.6"/>
+    <rect x="128" y="114" width="42" height="13" rx="3" fill="#F59E0B"/>
+    <text x="149" y="124" text-anchor="middle" font-size="7" font-weight="bold" fill="#1C1917">OPT-IN</text>
+    <text x="95" y="133" text-anchor="middle" font-size="10.5" font-weight="bold" fill="#FDE68A">⚡ SemanticSplitter</text>
+    <text x="95" y="148" text-anchor="middle" font-size="9" fill="#FCD34D">embedding-guided boundary</text>
+    <text x="95" y="161" text-anchor="middle" font-size="8" fill="#F59E0B" fill-opacity="0.85">POCKET_SEMANTIC_SPLIT=1</text>
   </g>
+  <!-- EMB -->
+  <rect x="12" y="180" width="166" height="50" rx="8" fill="#FFF" fill-opacity="0.1" stroke="#93C5FD" stroke-opacity="0.4" stroke-width="0.8"/>
+  <text x="95" y="200" text-anchor="middle" font-size="10.5" font-weight="600" fill="#DBEAFE">SentenceTransformer</text>
+  <text x="95" y="216" text-anchor="middle" font-size="9" fill="#93C5FD">Qwen3-0.6B · SigLIP2 opt-in</text>
+  <!-- IDG -->
+  <rect x="12" y="242" width="166" height="46" rx="8" fill="#1E3A8A" fill-opacity="0.75"/>
+  <text x="95" y="262" text-anchor="middle" font-size="10.5" font-weight="600" fill="#DBEAFE">IdGenerator</text>
+  <text x="95" y="278" text-anchor="middle" font-size="9" fill="#93C5FD">deterministic IDs · memo</text>
+  <text x="95" y="348" text-anchor="middle" font-size="8.5" fill="#60A5FA" fill-opacity="0.6">split · embed · id · memo</text>
+</g>
 
-  <!-- ===== 2. Refine ===== -->
-  <g transform="translate(216, 100)" filter="url(#shadow)">
-    <rect width="176" height="300" rx="12" fill="url(#g-refine)" />
-    <text x="88" y="32" text-anchor="middle" font-size="15" font-weight="bold" fill="#FFFFFF">2 · Refine</text>
-    <text x="88" y="50" text-anchor="middle" font-size="10" fill="#E0F2FE">TextRefiner</text>
-    <g transform="translate(16, 66)">
-      <rect width="144" height="68" rx="8" fill="#FFFFFF" />
-      <text x="72" y="24" text-anchor="middle" font-size="11" font-weight="bold" fill="#075985">Normalize</text>
-      <text x="72" y="41" text-anchor="middle" font-size="9" fill="#0369A1">NFC · CRLF→LF</text>
-      <text x="72" y="56" text-anchor="middle" font-size="9" fill="#0369A1">whitespace · blank lines</text>
-    </g>
-    <g transform="translate(16, 146)">
-      <rect width="144" height="68" rx="8" fill="#FFFFFF" />
-      <text x="72" y="24" text-anchor="middle" font-size="11" font-weight="bold" fill="#075985">Offset map</text>
-      <text x="72" y="41" text-anchor="middle" font-size="9" fill="#0369A1">lineage → original bytes</text>
-      <text x="72" y="56" text-anchor="middle" font-size="9" fill="#0369A1">code: indent-preserving</text>
-    </g>
+<!-- 4 · LOAD ─────────────────────────────────────────────────── -->
+<g transform="translate(646,74)" filter="url(#a-shadow)">
+  <rect width="190" height="360" rx="12" fill="url(#a-ld)" stroke="#34D399" stroke-width="1"/>
+  <rect width="190" height="42" rx="12" fill="#022C22" fill-opacity="0.65"/>
+  <text x="95" y="20" text-anchor="middle" font-size="13" font-weight="bold" fill="#D1FAE5">4 · Load</text>
+  <text x="95" y="35" text-anchor="middle" font-size="9" fill="#A7F3D0">SQLite target</text>
+  <!-- VEC -->
+  <rect x="12" y="54" width="166" height="50" rx="8" fill="#FFF" fill-opacity="0.1" stroke="#6EE7B7" stroke-opacity="0.4" stroke-width="0.8"/>
+  <text x="95" y="75" text-anchor="middle" font-size="10.5" font-weight="600" fill="#D1FAE5">sqlite-vec</text>
+  <text x="95" y="91" text-anchor="middle" font-size="9" fill="#6EE7B7">vector · cosine similarity</text>
+  <!-- FTS -->
+  <rect x="12" y="116" width="166" height="50" rx="8" fill="#FFF" fill-opacity="0.1" stroke="#6EE7B7" stroke-opacity="0.4" stroke-width="0.8"/>
+  <text x="95" y="137" text-anchor="middle" font-size="10.5" font-weight="600" fill="#D1FAE5">FTS5 index</text>
+  <text x="95" y="153" text-anchor="middle" font-size="9" fill="#6EE7B7">lexical · BM25 ranking</text>
+  <!-- LIN -->
+  <rect x="12" y="178" width="166" height="50" rx="8" fill="#022C22" fill-opacity="0.8"/>
+  <text x="95" y="199" text-anchor="middle" font-size="10.5" font-weight="bold" fill="#D1FAE5">lineage · memo</text>
+  <text x="95" y="215" text-anchor="middle" font-size="9" fill="#6EE7B7">auto-sync · Δ cleanup</text>
+  <text x="95" y="348" text-anchor="middle" font-size="8.5" fill="#34D399" fill-opacity="0.6">upsert · delete sweep</text>
+</g>
+
+<!-- 5 · SERVE ───────────────────────────────────────────────── -->
+<g transform="translate(856,74)" filter="url(#a-shadow)">
+  <rect width="328" height="360" rx="12" fill="url(#a-sv)" stroke="#FCD34D" stroke-width="1"/>
+  <rect width="328" height="42" rx="12" fill="#451A03" fill-opacity="0.65"/>
+  <text x="164" y="20" text-anchor="middle" font-size="13" font-weight="bold" fill="#FEF3C7">5 · Serve</text>
+  <text x="164" y="35" text-anchor="middle" font-size="9" fill="#FDE68A">retrieval.py</text>
+  <!-- HYDE SOTA -->
+  <g filter="url(#a-glow-sota)">
+    <rect x="12" y="50" width="304" height="54" rx="8" fill="#1C1917" stroke="#F59E0B" stroke-width="1.6"/>
+    <rect x="254" y="53" width="54" height="13" rx="3" fill="#F59E0B"/>
+    <text x="281" y="63" text-anchor="middle" font-size="7" font-weight="bold" fill="#1C1917">OPT-IN</text>
+    <text x="164" y="74" text-anchor="middle" font-size="11" font-weight="bold" fill="#FDE68A">⚡ HyDE — Hypothetical Doc Embedding</text>
+    <text x="164" y="89" text-anchor="middle" font-size="9" fill="#FCD34D">Ollama → hypothetical passage → embed → vector search</text>
+    <text x="164" y="100" text-anchor="middle" font-size="8" fill="#F59E0B" fill-opacity="0.85">POCKET_HYDE=1 / pocket search --hyde</text>
   </g>
-
-  <!-- ===== 3. Transform ===== -->
-  <g transform="translate(412, 100)" filter="url(#shadow)">
-    <rect width="176" height="300" rx="12" fill="url(#g-transform)" />
-    <text x="88" y="32" text-anchor="middle" font-size="15" font-weight="bold" fill="#FFFFFF">3 · Transform</text>
-    <text x="88" y="50" text-anchor="middle" font-size="10" fill="#DBEAFE">PocketIndex ETL</text>
-    <g transform="translate(16, 64)">
-      <rect width="144" height="58" rx="8" fill="#FFFFFF" />
-      <text x="72" y="23" text-anchor="middle" font-size="11" font-weight="bold" fill="#1E3A8A">RecursiveSplitter</text>
-      <text x="72" y="40" text-anchor="middle" font-size="9" fill="#3B82F6">code-aware boundaries</text>
-    </g>
-    <g transform="translate(16, 134)">
-      <rect width="144" height="58" rx="8" fill="#FFFFFF" />
-      <text x="72" y="23" text-anchor="middle" font-size="11" font-weight="bold" fill="#1E3A8A">SentenceTransformer</text>
-      <text x="72" y="40" text-anchor="middle" font-size="9" fill="#3B82F6">Qwen3-Embedding-0.6B (+ SigLIP2 opt-in)</text>
-    </g>
-    <g transform="translate(16, 204)">
-      <rect width="144" height="58" rx="8" fill="#FFFFFF" />
-      <text x="72" y="23" text-anchor="middle" font-size="11" font-weight="bold" fill="#1E3A8A">IdGenerator</text>
-      <text x="72" y="40" text-anchor="middle" font-size="9" fill="#3B82F6">deterministic IDs · memo</text>
-    </g>
+  <!-- dashed HYDE→RRF -->
+  <path d="M 164 104 L 164 115" stroke="#F59E0B" stroke-width="1.2" stroke-dasharray="3 2" fill="none" marker-end="url(#a-arr-sota)"/>
+  <!-- RRF -->
+  <rect x="12" y="115" width="304" height="48" rx="8" fill="#FFF" fill-opacity="0.12" stroke="#FDE68A" stroke-opacity="0.4" stroke-width="0.8"/>
+  <text x="164" y="135" text-anchor="middle" font-size="10.5" font-weight="600" fill="#FEF3C7">Hybrid Retrieval · RRF</text>
+  <text x="164" y="152" text-anchor="middle" font-size="9" fill="#FCD34D">vector + lexical (+ graph) · Reciprocal Rank Fusion · MMR</text>
+  <!-- RRF→RERANK solid -->
+  <path d="M 164 163 L 164 175" stroke="#94A3B8" stroke-width="1.5" fill="none" marker-end="url(#a-arr)"/>
+  <!-- RERANK SOTA -->
+  <g filter="url(#a-glow-sota)">
+    <rect x="12" y="175" width="304" height="54" rx="8" fill="#1C1917" stroke="#F59E0B" stroke-width="1.6"/>
+    <rect x="254" y="178" width="54" height="13" rx="3" fill="#F59E0B"/>
+    <text x="281" y="188" text-anchor="middle" font-size="7" font-weight="bold" fill="#1C1917">OPT-IN</text>
+    <text x="164" y="198" text-anchor="middle" font-size="11" font-weight="bold" fill="#FDE68A">⚡ Cross-encoder Reranker</text>
+    <text x="164" y="213" text-anchor="middle" font-size="9" fill="#FCD34D">ms-marco-MiniLM · +5–15% MRR · precision pass</text>
+    <text x="164" y="224" text-anchor="middle" font-size="8" fill="#F59E0B" fill-opacity="0.85">POCKET_RERANKER=1 / pocket search --rerank</text>
   </g>
+  <!-- RERANK→Surfaces solid -->
+  <path d="M 164 229 L 164 242" stroke="#94A3B8" stroke-width="1.5" fill="none" marker-end="url(#a-arr)"/>
+  <!-- Surfaces -->
+  <rect x="12" y="242" width="304" height="60" rx="8" fill="#451A03" fill-opacity="0.85" stroke="#FDE68A" stroke-opacity="0.25" stroke-width="0.8"/>
+  <text x="164" y="258" text-anchor="middle" font-size="9.5" font-weight="bold" fill="#FEF3C7">Surfaces</text>
+  <rect x="20" y="264" width="88" height="24" rx="5" fill="#FFF" fill-opacity="0.1" stroke="#FDE68A" stroke-opacity="0.35" stroke-width="0.8"/>
+  <text x="64" y="280" text-anchor="middle" font-size="9" font-weight="600" fill="#FEF3C7">CLI</text>
+  <rect x="120" y="264" width="88" height="24" rx="5" fill="#FFF" fill-opacity="0.1" stroke="#FDE68A" stroke-opacity="0.35" stroke-width="0.8"/>
+  <text x="164" y="280" text-anchor="middle" font-size="9" font-weight="600" fill="#FEF3C7">MCP</text>
+  <rect x="220" y="264" width="88" height="24" rx="5" fill="#FFF" fill-opacity="0.1" stroke="#FDE68A" stroke-opacity="0.35" stroke-width="0.8"/>
+  <text x="264" y="280" text-anchor="middle" font-size="9" font-weight="600" fill="#FEF3C7">REST + Web UI</text>
+  <text x="164" y="348" text-anchor="middle" font-size="8.5" fill="#FCD34D" fill-opacity="0.6">fuse · rerank · surface · 3 interfaces</text>
+</g>
 
-  <!-- ===== 4. Load ===== -->
-  <g transform="translate(608, 100)" filter="url(#shadow)">
-    <rect width="176" height="300" rx="12" fill="url(#g-load)" />
-    <text x="88" y="32" text-anchor="middle" font-size="15" font-weight="bold" fill="#FFFFFF">4 · Load</text>
-    <text x="88" y="50" text-anchor="middle" font-size="10" fill="#D1FAE5">SQLite target</text>
-    <g transform="translate(16, 64)">
-      <rect width="144" height="56" rx="8" fill="#FFFFFF" />
-      <text x="72" y="23" text-anchor="middle" font-size="11" font-weight="bold" fill="#065F46">sqlite-vec</text>
-      <text x="72" y="40" text-anchor="middle" font-size="9" fill="#059669">vector · cosine</text>
-    </g>
-    <g transform="translate(16, 130)">
-      <rect width="144" height="56" rx="8" fill="#FFFFFF" />
-      <text x="72" y="23" text-anchor="middle" font-size="11" font-weight="bold" fill="#065F46">FTS5 index</text>
-      <text x="72" y="40" text-anchor="middle" font-size="9" fill="#059669">lexical · BM25</text>
-    </g>
-    <g transform="translate(16, 196)">
-      <rect width="144" height="56" rx="8" fill="#047857" />
-      <text x="72" y="23" text-anchor="middle" font-size="11" font-weight="bold" fill="#FFFFFF">lineage · memo</text>
-      <text x="72" y="40" text-anchor="middle" font-size="9" fill="#A7F3D0">auto-sync &amp; cleanup</text>
-    </g>
+<!-- ═══════════════════════════════════════════════════════════
+     PIPELINE ARROWS  y=254 (74+180)
+     ═══════════════════════════════════════════════════════════ -->
+<line x1="208" y1="254" x2="224" y2="254" stroke="#94A3B8" stroke-width="2.5" marker-end="url(#a-arr)"/>
+<line x1="418" y1="254" x2="434" y2="254" stroke="#94A3B8" stroke-width="2.5" marker-end="url(#a-arr)"/>
+<line x1="628" y1="254" x2="644" y2="254" stroke="#94A3B8" stroke-width="2.5" marker-end="url(#a-arr)"/>
+<line x1="838" y1="254" x2="854" y2="254" stroke="#94A3B8" stroke-width="2.5" marker-end="url(#a-arr)"/>
+
+<!-- ═══════════════════════════════════════════════════════════
+     BOTTOM SECTION  y=452
+     EVAL x=16 w=420 h=118
+     GRAPH x=452 w=732 h=118
+     ═══════════════════════════════════════════════════════════ -->
+
+<!-- EVAL -->
+<g transform="translate(16,452)" filter="url(#a-shadow)">
+  <rect width="420" height="118" rx="12" fill="url(#a-ev)" stroke="#60A5FA" stroke-width="1"/>
+  <rect width="420" height="36" rx="12" fill="#0F2044" fill-opacity="0.85"/>
+  <text x="210" y="19" text-anchor="middle" font-size="12" font-weight="bold" fill="#DBEAFE">📊 pocket eval — Regression Harness</text>
+  <text x="210" y="32" text-anchor="middle" font-size="8.5" fill="#93C5FD">same retrieval.search path · never drifts from production</text>
+  <text x="210" y="54" text-anchor="middle" font-size="10" fill="#BFDBFE">Hit@k · MRR · Precision@k · Recall@k · MAP@k</text>
+  <text x="210" y="70" text-anchor="middle" font-size="9" fill="#93C5FD">synthetic or gold cases · baseline compare · CI gate</text>
+  <text x="210" y="84" text-anchor="middle" font-size="9" fill="#93C5FD">pocket eval --tune --save-weights → grid-search RRF weights</text>
+  <g filter="url(#a-glow-sota)">
+    <rect x="28" y="92" width="364" height="20" rx="6" fill="#1C1917" stroke="#F59E0B" stroke-width="1.4"/>
+    <text x="210" y="106" text-anchor="middle" font-size="9.5" font-weight="bold" fill="#FDE68A">⚡ LLM-as-Judge · --with-judge · Faithfulness + Relevance (RAGAS-style)</text>
   </g>
+</g>
 
-  <!-- ===== 5. Serve ===== -->
-  <g transform="translate(804, 100)" filter="url(#shadow)">
-    <rect width="176" height="300" rx="12" fill="url(#g-serve)" />
-    <text x="88" y="32" text-anchor="middle" font-size="15" font-weight="bold" fill="#FFFFFF">5 · Serve</text>
-    <text x="88" y="50" text-anchor="middle" font-size="10" fill="#FEF3C7">retrieval.py</text>
-    <g transform="translate(16, 66)">
-      <rect width="144" height="80" rx="8" fill="#FFFFFF" />
-      <text x="72" y="24" text-anchor="middle" font-size="11" font-weight="bold" fill="#92400E">Hybrid retrieval</text>
-      <text x="72" y="42" text-anchor="middle" font-size="9" fill="#B45309">vector + lexical (+ graph)</text>
-      <text x="72" y="58" text-anchor="middle" font-size="9" fill="#B45309">Reciprocal Rank Fusion</text>
-      <text x="72" y="73" text-anchor="middle" font-size="9" fill="#B45309">mode: hybrid·vector·lexical</text>
-    </g>
-    <g transform="translate(16, 160)">
-      <rect width="144" height="92" rx="8" fill="#FFFFFF" fill-opacity="0.18" stroke="#FFFFFF" stroke-opacity="0.55" />
-      <text x="72" y="22" text-anchor="middle" font-size="10" font-weight="bold" fill="#FFFFFF">Surfaces</text>
-      <text x="72" y="40" text-anchor="middle" font-size="9" fill="#FFF7ED">CLI · pocket search</text>
-      <text x="72" y="56" text-anchor="middle" font-size="9" fill="#FFF7ED">MCP · pocket-mcp</text>
-      <text x="72" y="72" text-anchor="middle" font-size="9" fill="#FFF7ED">REST + Web UI · pocket serve</text>
-    </g>
+<!-- GRAPH -->
+<g transform="translate(452,452)" filter="url(#a-shadow)">
+  <rect width="732" height="118" rx="12" fill="url(#a-gr)" stroke="#C084FC" stroke-width="1"/>
+  <rect width="732" height="36" rx="12" fill="#2E1065" fill-opacity="0.85"/>
+  <text x="366" y="19" text-anchor="middle" font-size="12" font-weight="bold" fill="#F3E8FF">🕸️ Knowledge Graph — optional branch (GraphRAG)</text>
+  <text x="366" y="32" text-anchor="middle" font-size="8.5" fill="#C4B5FD">pocket update --graph · POCKET_GRAPH=1  ·  same Δ lineage/memo sweep  ·  pocket graph "entity"</text>
+  <text x="366" y="54" text-anchor="middle" font-size="10" fill="#DDD6FE">extractor: deterministic (offline) | ollama | airllm  ·  entities + relations tables  ·  augments RRF</text>
+  <text x="366" y="70" text-anchor="middle" font-size="9" fill="#C4B5FD">list_concepts MCP tool · POCKET_GRAPH_MIN_CONFIDENCE=0.0 · HITL review gate</text>
+  <g filter="url(#a-glow-sota)">
+    <rect x="64" y="86" width="604" height="24" rx="6" fill="#1C1917" stroke="#F59E0B" stroke-width="1.4"/>
+    <text x="366" y="102" text-anchor="middle" font-size="9.5" font-weight="bold" fill="#FDE68A">⚡ Schema-constrained JSON extraction · Ollama ≥ 0.3.0 format:{schema} · grammar-constrained decoding · zero retry overhead</text>
   </g>
+</g>
 
-  <!-- pipeline arrows -->
-  <path d="M 196 250 L 216 250" fill="none" stroke="#475569" stroke-width="2" marker-end="url(#arrow)" />
-  <path d="M 392 250 L 412 250" fill="none" stroke="#475569" stroke-width="2" marker-end="url(#arrow)" />
-  <path d="M 588 250 L 608 250" fill="none" stroke="#475569" stroke-width="2" marker-end="url(#arrow)" />
-  <path d="M 784 250 L 804 250" fill="none" stroke="#475569" stroke-width="2" marker-end="url(#arrow)" />
+<!-- ═══════════════════════════════════════════════════════════
+     CROSS-SECTION ARROWS
+     ═══════════════════════════════════════════════════════════ -->
+<!-- XF→GRAPH (dashed purple) -->
+<path d="M 531 434 L 531 450" stroke="#9333EA" stroke-width="1.5" stroke-dasharray="5 3" fill="none" marker-end="url(#a-arr-gr)"/>
+<text x="537" y="445" font-size="8" fill="#9333EA" fill-opacity="0.85">--graph</text>
 
-  <!-- ===== Optional: Knowledge Graph branch ===== -->
-  <g transform="translate(412, 440)" filter="url(#shadow)">
-    <rect width="372" height="74" rx="12" fill="url(#g-graph)" />
-    <text x="186" y="28" text-anchor="middle" font-size="13" font-weight="bold" fill="#FFFFFF">Optional branch · Knowledge Graph (GraphRAG)</text>
-    <text x="186" y="46" text-anchor="middle" font-size="10" fill="#F5D0FE">pocket update --graph · extractor: deterministic | ollama | airllm</text>
-    <text x="186" y="62" text-anchor="middle" font-size="10" fill="#F5D0FE">entities + relations tables · same Δ lineage/memo sweep · pocket graph "…"</text>
-  </g>
-  <!-- transform feeds graph extraction, graph loads into target, graph augments serve -->
-  <path d="M 500 400 L 500 440" fill="none" stroke="#9333EA" stroke-width="2" stroke-dasharray="5 4" marker-end="url(#arrow)" />
-  <path d="M 696 440 L 696 412" fill="none" stroke="#9333EA" stroke-width="2" stroke-dasharray="5 4" marker-end="url(#arrow)" />
-  <path d="M 784 477 L 880 477 L 880 400" fill="none" stroke="#9333EA" stroke-width="2" stroke-dasharray="5 4" marker-end="url(#arrow)" />
+<!-- GRAPH→LOAD (dashed purple) -->
+<path d="M 740 452 L 740 435" stroke="#9333EA" stroke-width="1.5" stroke-dasharray="5 3" fill="none" marker-end="url(#a-arr-gr)"/>
+<text x="746" y="447" font-size="8" fill="#9333EA" fill-opacity="0.85">extract</text>
 
-  <!-- ===== Evaluation harness ===== -->
-  <g transform="translate(20, 440)" filter="url(#shadow)">
-    <rect width="372" height="74" rx="12" fill="#FFFFFF" stroke="#CBD5E1" />
-    <text x="186" y="28" text-anchor="middle" font-size="13" font-weight="bold" fill="#334155">Regression harness · pocket eval</text>
-    <text x="186" y="46" text-anchor="middle" font-size="10" fill="#64748B">Hit@k · MRR · Precision/Recall@k · MAP over the same search path</text>
-    <text x="186" y="62" text-anchor="middle" font-size="10" fill="#64748B">synthetic or gold cases · baseline compare fails CI on a drop</text>
-  </g>
-  <path d="M 240 440 L 240 400" fill="none" stroke="#94A3B8" stroke-width="2" stroke-dasharray="3 3" marker-end="url(#arrow)" />
+<!-- GRAPH→SERVE augment (dashed purple, goes up) -->
+<path d="M 990 452 L 990 435" stroke="#9333EA" stroke-width="1.5" stroke-dasharray="5 3" fill="none" marker-end="url(#a-arr-gr)"/>
+<text x="996" y="447" font-size="8" fill="#9333EA" fill-opacity="0.85">augment</text>
 
-  <text x="500" y="556" text-anchor="middle" font-size="11" fill="#94A3B8">Self-contained vendored engine (pocketindex) — no external pip ETL dependency</text>
+<!-- SERVE→EVAL (dashed blue, sweep left) -->
+<path d="M 1020 434 L 1020 443 L 226 443 L 226 450" stroke="#60A5FA" stroke-width="1.5" stroke-dasharray="5 3" fill="none" marker-end="url(#a-arr-ev)"/>
+<text x="640" y="441" text-anchor="middle" font-size="8" fill="#60A5FA" fill-opacity="0.85">scores</text>
+
+<!-- ═══════════════════════════════════════════════════════════
+     LEGEND
+     ═══════════════════════════════════════════════════════════ -->
+<rect x="16" y="584" width="1168" height="44" rx="8" fill="#1E293B" fill-opacity="0.7" stroke="#334155" stroke-width="0.8"/>
+<line x1="28" y1="606" x2="66" y2="606" stroke="#94A3B8" stroke-width="2.2" marker-end="url(#a-arr)"/>
+<text x="74" y="610" font-size="9" fill="#94A3B8">main pipeline</text>
+<line x1="164" y1="606" x2="202" y2="606" stroke="#F59E0B" stroke-width="1.5" stroke-dasharray="4 2" marker-end="url(#a-arr-sota)"/>
+<text x="210" y="610" font-size="9" fill="#F59E0B">opt-in SOTA path</text>
+<line x1="324" y1="606" x2="362" y2="606" stroke="#9333EA" stroke-width="1.5" stroke-dasharray="4 2" marker-end="url(#a-arr-gr)"/>
+<text x="370" y="610" font-size="9" fill="#9333EA">graph branch</text>
+<line x1="454" y1="606" x2="492" y2="606" stroke="#60A5FA" stroke-width="1.5" stroke-dasharray="4 2" marker-end="url(#a-arr-ev)"/>
+<text x="500" y="610" font-size="9" fill="#60A5FA">eval feedback</text>
+<rect x="582" y="598" width="56" height="16" rx="4" fill="#1C1917" stroke="#F59E0B" stroke-width="1"/>
+<text x="610" y="610" text-anchor="middle" font-size="8" font-weight="bold" fill="#FDE68A">⚡ OPT-IN</text>
+<text x="648" y="610" font-size="9" fill="#F59E0B">= 2026 SOTA improvement (all default OFF · backward-compatible)</text>
+<text x="1184" y="610" text-anchor="end" font-size="8.5" fill="#475569">genome-pocket · pocketindex vendored engine</text>
+
+<!-- ─── Stage number strip ────────────────────────────────── -->
+<text x="111"  y="68" text-anchor="middle" font-size="9" fill="#818CF8" fill-opacity="0.6">①</text>
+<text x="321"  y="68" text-anchor="middle" font-size="9" fill="#38BDF8" fill-opacity="0.6">②</text>
+<text x="531"  y="68" text-anchor="middle" font-size="9" fill="#60A5FA" fill-opacity="0.6">③</text>
+<text x="741"  y="68" text-anchor="middle" font-size="9" fill="#34D399" fill-opacity="0.6">④</text>
+<text x="1020" y="68" text-anchor="middle" font-size="9" fill="#FCD34D" fill-opacity="0.6">⑤</text>
+
+<!-- Footer -->
+<text x="600" y="714" text-anchor="middle" font-size="9" fill="#334155">Self-contained vendored engine (pocketindex) — no external pip ETL dependency · genome-pocket © MIT</text>
 </svg>

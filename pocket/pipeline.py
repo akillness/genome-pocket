@@ -9,7 +9,7 @@ import pocketindex as pix
 from pocketindex.connectors import localfs, sqlite
 from pocketindex.ops.sentence_transformers import SentenceTransformerEmbedder, build_embedder
 from pocketindex.resources.file import FileLike
-from pocketindex.ops.text import RecursiveSplitter, detect_code_language
+from pocketindex.ops.text import RecursiveSplitter, SemanticSplitter, detect_code_language
 from pocketindex.ops.refine import TextRefiner
 from pocketindex.ops.extract import build_extractor, ExtractedEntity, SqliteExtractionStore
 from pocketindex.ops.entity_resolution import resolve_entities, normalize
@@ -81,18 +81,35 @@ async def pocket_lifespan(builder: pix.EnvironmentBuilder) -> AsyncIterator[None
     yield
 
 
-def _chunk_file(raw_text: str, filename: pathlib.PurePath) -> List[Chunk]:
+def _chunk_file(
+    raw_text: str,
+    filename: pathlib.PurePath,
+    embedder=None,
+) -> List[Chunk]:
     """Refine + split a file's raw text into offset-exact chunks.
 
     Shared by the embedding pass and the graph-extraction pass so both attribute
     facts to the same chunk ids and the same source offsets.
+
+    When *embedder* is supplied and ``POCKET_SEMANTIC_SPLIT`` is enabled, prose
+    and markdown files are split by embedding-guided semantic boundaries instead
+    of fixed character counts (SemanticSplitter).  Code files (is_code=True)
+    always use the language-aware RecursiveSplitter regardless — sentence
+    similarity boundaries are meaningless for source code.
     """
     language = detect_code_language(filename=filename.name)
     is_code = language is not None and language not in ("markdown", "html")
     refined = _refiner.refine(raw_text, code=is_code)
-    chunks = _splitter.split(
-        refined.text, chunk_size=1000, chunk_overlap=200, language=language
-    )
+    if config.POCKET_SEMANTIC_SPLIT and not is_code and embedder is not None:
+        _sem_splitter = SemanticSplitter(
+            model=getattr(embedder, "model", None),
+            breakpoint_threshold=config.POCKET_SEMANTIC_SPLIT_THRESHOLD,
+        )
+        chunks = _sem_splitter.split(refined.text, language=language)
+    else:
+        chunks = _splitter.split(
+            refined.text, chunk_size=1000, chunk_overlap=200, language=language
+        )
     for chunk in chunks:
         chunk.start.char_offset = refined.source_offset(chunk.start.char_offset)
         chunk.end.char_offset = refined.source_offset(chunk.end.char_offset)
@@ -149,7 +166,10 @@ async def process_file(file: FileLike, table: sqlite.TableTarget[ChunkEmbedding]
     # Detect whether this is source code from its filename. Code files get an
     # indentation-preserving refine pass and language-aware (structural)
     # splitting; prose/markdown keeps the original whitespace-collapsing path.
-    chunks = _chunk_file(raw_text, file.file_path.path)
+    # Pass the embedder so SemanticSplitter can use the already-loaded model
+    # when POCKET_SEMANTIC_SPLIT=1 (avoids a second model load).
+    _embedder = pix.use_context(EMBEDDER) if config.POCKET_SEMANTIC_SPLIT else None
+    chunks = _chunk_file(raw_text, file.file_path.path, embedder=_embedder)
     id_gen = IdGenerator()
 
     await pix.map(process_chunk, chunks, file.file_path.path, id_gen, table)

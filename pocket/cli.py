@@ -1,3 +1,4 @@
+import json
 import os
 import click
 import pathlib
@@ -5,6 +6,8 @@ import pathlib
 import pocketindex as pix
 from pocket.config import POCKET_SOURCE_DIR, POCKET_SQLITE_DB, EMBEDDING_MODEL
 from pocket import retrieval
+from pocket.evaluation import METRIC_NAMES
+
 
 
 def _get_app_main():
@@ -186,21 +189,86 @@ def _interactive_graph_review(echo=click.echo, prompt=click.prompt):
 @click.option("--limit", default=5, help="Number of results to return")
 @click.option(
     "--mode",
-    type=click.Choice(["hybrid", "vector", "lexical", "graph"]),
+    type=click.Choice(["auto", "hybrid", "vector", "lexical", "graph"]),
     default="hybrid",
     help="Retrieval strategy: hybrid (vector+lexical+graph RRF), vector, "
-    "lexical, or graph (entity-anchored multi-hop traversal).",
+    "lexical, graph (entity-anchored multi-hop traversal), or auto "
+    "(POCKET-504: pick the mode from the query's shape — code-like queries "
+    "go lexical, relationship questions go graph, else hybrid).",
 )
-def search(query, limit, mode):
+
+@click.option(
+    "--mmr/--no-mmr",
+    "mmr",
+    default=None,
+    help="Re-rank results for diversity with Maximal Marginal Relevance "
+    "(overrides POCKET_MMR; default follows config).",
+)
+@click.option(
+    "--rerank/--no-rerank",
+    "rerank",
+    default=None,
+    help="Apply a cross-encoder reranker after RRF fusion for higher precision "
+    "(overrides POCKET_RERANKER; default follows config).",
+)
+@click.option(
+    "--hyde/--no-hyde",
+    "hyde",
+    default=None,
+    help="Expand the query via HyDE (Hypothetical Document Embeddings) before "
+    "vector search (overrides POCKET_HYDE; requires a running Ollama daemon).",
+)
+@click.option(
+    "--expand/--no-expand",
+    "expand",
+    default=None,
+    help="Augment the query with deterministic synonym/acronym expansion terms "
+    "before retrieval (POCKET-503; overrides POCKET_QUERY_EXPANSION, default "
+    "follows config). Offline, no daemon required.",
+)
+@click.option(
+    "--json",
+    "as_json",
+    is_flag=True,
+    help="Emit results as a JSON array on stdout (agent-native; "
+    "human status lines go to stderr).",
+)
+def search(query, limit, mode, mmr, rerank, hyde, expand, as_json):
     """Search the indexed notes using hybrid (vector + lexical) retrieval."""
+    if as_json:
+        # stdout stays pure JSON so a calling agent can parse it; status and
+        # error context go to stderr.
+        if not POCKET_SQLITE_DB.exists():
+            click.echo(
+                "Database does not exist. Please run 'pocket update' first.",
+                err=True,
+            )
+            click.echo("[]")
+            return
+        hits = retrieval.search(query, limit=limit, mode=mode, use_mmr=mmr, use_reranker=rerank, use_hyde=hyde, use_expansion=expand)
+        click.echo(
+            json.dumps(
+                {
+                    "query": query,
+                    "mode": mode,
+                    "count": len(hits),
+                    "hits": [h.to_dict() for h in hits],
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        return
+
     click.echo(f"Searching for: '{query}' (mode={mode})...")
 
     if not POCKET_SQLITE_DB.exists():
         click.echo("Database does not exist. Please run 'pocket update' first.")
         return
 
-    hits = retrieval.search(query, limit=limit, mode=mode)
+    hits = retrieval.search(query, limit=limit, mode=mode, use_mmr=mmr, use_reranker=rerank, use_hyde=hyde, use_expansion=expand)
     click.echo(retrieval.format_hits(hits))
+
 
 
 @cli.command(name="eval")
@@ -244,13 +312,76 @@ def search(query, limit, mode):
     help="Allowed drop versus baseline before a metric counts as a regression.",
 )
 @click.option("--show-cases", is_flag=True, help="Print per-case hit/miss detail.")
-def eval_cmd(k, mode, cases_file, per_file, baseline_file, save_file, tolerance, show_cases):
+@click.option(
+    "--tune",
+    is_flag=True,
+    help="Grid-search per-strategy RRF weights (POCKET-502) over these cases "
+    "and report the best vs the equal-weight baseline instead of a plain run.",
+)
+@click.option(
+    "--tune-metric",
+    type=click.Choice(list(METRIC_NAMES)),
+    default="mean_average_precision",
+    help="Metric the --tune grid search maximizes.",
+)
+@click.option(
+    "--tune-method",
+    type=click.Choice(["grid", "coordinate"]),
+    default="grid",
+    help="Search strategy for --tune: exhaustive 'grid' (default) or cheaper "
+    "'coordinate' ascent (optimize one strategy at a time).",
+)
+
+@click.option(
+    "--save-weights",
+    "weights_file",
+    type=click.Path(dir_okay=False),
+    default=None,
+    help="With --tune, write the winning weights here (point "
+    "POCKET_RRF_WEIGHTS_FILE at it to make search/eval use them).",
+)
+@click.option(
+    "--mmr/--no-mmr",
+
+    "mmr",
+    default=None,
+    help="Re-rank with Maximal Marginal Relevance before scoring, so the "
+    "harness measures the MMR diversity trade-off (POCKET-501) on the cases "
+    "(overrides POCKET_MMR; default follows config). Ignored with --tune.",
+)
+@click.option(
+    "--expand/--no-expand",
+    "expand",
+    default=None,
+    help="Augment each query with deterministic synonym/acronym expansion "
+    "before scoring, so the harness measures the query-expansion recall lift "
+    "(POCKET-503; overrides POCKET_QUERY_EXPANSION, default follows config). "
+    "Ignored with --tune.",
+)
+@click.option(
+    "--with-judge",
+    "with_judge",
+    is_flag=True,
+    help="After standard IR metrics, score each retrieved chunk's relevance with "
+    "a local Ollama LLM judge (RAGAS-style context relevance). "
+    "Requires a running Ollama daemon at OLLAMA_HOST.",
+)
+@click.option(
+    "--judge-model",
+    default=None,
+    help="Ollama model to use as judge (default: POCKET_HYDE_OLLAMA_MODEL).",
+)
+def eval_cmd(k, mode, cases_file, per_file, baseline_file, save_file, tolerance, show_cases, tune, tune_metric, tune_method, weights_file, mmr, expand, with_judge, judge_model):
+
+
     """Evaluate retrieval quality and guard against regressions (POCKET-303).
 
     Runs standard IR metrics (Hit@k, MRR, Precision/Recall@k, MAP) over either a
     hand-written gold set (--cases) or query/context pairs synthesized from the
     current index. With --baseline it fails (exit 1) if any metric regressed; with
-    --save it records the run as a new baseline.
+    --save it records the run as a new baseline. With --tune it grid-searches the
+    per-strategy fusion weights (POCKET-502) and reports/persists the best.
+
     """
     from pocket import evaluation
 
@@ -269,8 +400,47 @@ def eval_cmd(k, mode, cases_file, per_file, baseline_file, save_file, tolerance,
         click.echo("No evaluation cases available (empty index or no cases).")
         raise SystemExit(1)
 
-    metrics = evaluation.evaluate(cases, k=k)
+
+    if tune:
+        result = evaluation.tune_weights(
+            cases, k=k, metric=tune_metric, method=tune_method
+        )
+        click.echo(
+            f"Tuned RRF weights via {tune_method} search over "
+            f"{len(result.trials)} combination(s) "
+            f"(varying {', '.join(result.tuned_strategies) or 'nothing'}), "
+            f"maximizing {result.metric}:"
+        )
+        click.echo(
+            f"  baseline (equal weights): {result.baseline_score:.4f}"
+        )
+        weights_str = ", ".join(
+            f"{s}={result.best_weights[s]:g}"
+            for s in ("vector", "lexical", "graph")
+        )
+        click.echo(
+            f"  best     ({weights_str}): {result.best_score:.4f} "
+            f"({result.delta:+.4f})"
+        )
+        if not result.improved:
+            click.echo("  No weighting beat the equal-weight baseline.")
+        if weights_file:
+            evaluation.save_weights(pathlib.Path(weights_file), result.best_weights)
+            click.echo(
+                f"\nSaved weights to {weights_file}. Set "
+                f"POCKET_RRF_WEIGHTS_FILE={weights_file} to apply them."
+            )
+        return
+
+    metrics = evaluation.evaluate(cases, k=k, use_mmr=mmr, use_expansion=expand)
+
     click.echo(evaluation.format_report(metrics, show_cases=show_cases))
+
+    if with_judge:
+        judge = evaluation.evaluate_with_judge(
+            cases, k=k, ollama_model=judge_model
+        )
+        click.echo(evaluation.format_judge_report(judge))
 
     if save_file:
         evaluation.save_baseline(pathlib.Path(save_file), metrics)

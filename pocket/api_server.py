@@ -8,10 +8,13 @@ pulled in transitively by the MCP dependency) to avoid adding heavy deps.
 Endpoints:
   GET  /                              -> local tracing & lineage web UI (HTML)
   GET  /health                       -> liveness + index status
-  GET  /search?q=...&limit=&mode=    -> hybrid/vector/lexical/graph retrieval
+  GET  /search?q=...&limit=&mode=    -> auto/hybrid/vector/lexical/graph retrieval
+
   POST /search  {query, limit, mode} -> same, JSON body
   GET  /trace?q=...&limit=&mode=     -> query-routing trace + contributing chunks
   GET  /lineage?file_path=...        -> per-file chunk lineage
+  GET  /pending                      -> graph facts staged for HITL review
+  POST /pending/{approve|reject}     -> commit/discard staged facts (JSON {ids?})
 """
 from starlette.applications import Starlette
 from starlette.requests import Request
@@ -19,10 +22,13 @@ from starlette.responses import HTMLResponse, JSONResponse
 from starlette.routing import Route
 
 import pocket.config as config
-from pocket import retrieval
+from pocket import admin, retrieval
 from pocket.web_ui import INDEX_HTML
 
-_VALID_MODES = {"hybrid", "vector", "lexical", "graph"}
+# "auto" engages the semantic query router (POCKET-504): the mode is picked from
+# the query's shape (code -> lexical, relationship -> graph, else hybrid).
+_VALID_MODES = {"auto", "hybrid", "vector", "lexical", "graph"}
+
 
 
 def _index_exists() -> bool:
@@ -124,6 +130,66 @@ async def trace(request: Request) -> JSONResponse:
     return JSONResponse(retrieval.routing_trace(query, limit=limit, mode=mode))
 
 
+# ids are 64-bit hashes (> 2**53) — stringify for JSON so JS doesn't corrupt them
+def _stringify_pending(pending: dict) -> dict:
+    return {
+        key: [{**row, "id": str(row["id"])} for row in pending.get(key, [])]
+        for key in ("entities", "relations")
+    }
+
+
+def _parse_ids(body: dict):
+    """Return ``(ids, error)``: ``ids`` is ``None`` (=all) or a list of ints."""
+    raw = body.get("ids")
+    if raw is None:
+        return None, None
+    if not isinstance(raw, list):
+        return None, "ids must be a list of integer-valued strings or null"
+    ids = []
+    for value in raw:
+        if isinstance(value, bool):
+            return None, "ids must be integer-valued strings or integers"
+        try:
+            ids.append(int(value))
+        except (TypeError, ValueError):
+            return None, "ids must be integer-valued strings or integers"
+    return ids, None
+
+
+async def pending(request: Request) -> JSONResponse:
+    """List graph facts the confidence gate staged for HITL review (POCKET-505)."""
+    if not _index_exists():
+        return JSONResponse(
+            {"error": "index not built; run 'pocket update' first"}, status_code=503
+        )
+    return JSONResponse(_stringify_pending(admin.list_pending()))
+
+
+async def pending_review(request: Request) -> JSONResponse:
+    """Approve or reject staged facts; ``{ids: [...]}`` or omit/``null`` for all."""
+    action = request.path_params.get("action")
+    if action not in ("approve", "reject"):
+        return JSONResponse(
+            {"error": "action must be 'approve' or 'reject'"}, status_code=404
+        )
+    if not _index_exists():
+        return JSONResponse(
+            {"error": "index not built; run 'pocket update' first"}, status_code=503
+        )
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    if not isinstance(body, dict):
+        body = {}
+    ids, err = _parse_ids(body)
+    if err:
+        return JSONResponse({"error": err}, status_code=400)
+    review = admin.approve_pending if action == "approve" else admin.reject_pending
+    counts = review(ids)
+    return JSONResponse({"action": action, **counts})
+
+
 def create_app() -> Starlette:
     """Build the Starlette ASGI application."""
     routes = [
@@ -132,6 +198,8 @@ def create_app() -> Starlette:
         Route("/search", search_endpoint, methods=["GET", "POST"]),
         Route("/trace", trace, methods=["GET"]),
         Route("/lineage", lineage, methods=["GET"]),
+        Route("/pending", pending, methods=["GET"]),
+        Route("/pending/{action}", pending_review, methods=["POST"]),
     ]
     return Starlette(routes=routes)
 

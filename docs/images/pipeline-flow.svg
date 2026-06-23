@@ -1,0 +1,280 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1080 570" width="100%" font-family="'Segoe UI',system-ui,-apple-system,Roboto,sans-serif">
+<defs>
+  <linearGradient id="pf-bg" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#0F172A"/><stop offset="100%" stop-color="#1E293B"/></linearGradient>
+  <linearGradient id="pf-src" x1="0%" y1="0%" x2="0%" y2="100%"><stop offset="0%" stop-color="#4338CA"/><stop offset="100%" stop-color="#6D28D9"/></linearGradient>
+  <linearGradient id="pf-ref" x1="0%" y1="0%" x2="0%" y2="100%"><stop offset="0%" stop-color="#075985"/><stop offset="100%" stop-color="#0284C7"/></linearGradient>
+  <linearGradient id="pf-xf"  x1="0%" y1="0%" x2="0%" y2="100%"><stop offset="0%" stop-color="#1E3A8A"/><stop offset="100%" stop-color="#2563EB"/></linearGradient>
+  <linearGradient id="pf-ld"  x1="0%" y1="0%" x2="0%" y2="100%"><stop offset="0%" stop-color="#064E3B"/><stop offset="100%" stop-color="#059669"/></linearGradient>
+  <linearGradient id="pf-sv"  x1="0%" y1="0%" x2="0%" y2="100%"><stop offset="0%" stop-color="#78350F"/><stop offset="100%" stop-color="#B45309"/></linearGradient>
+  <linearGradient id="pf-gr"  x1="0%" y1="0%" x2="100%" y2="0%"><stop offset="0%" stop-color="#4C1D95"/><stop offset="100%" stop-color="#7C3AED"/></linearGradient>
+  <linearGradient id="pf-ev"  x1="0%" y1="0%" x2="100%" y2="0%"><stop offset="0%" stop-color="#0F2044"/><stop offset="100%" stop-color="#1E3A8A"/></linearGradient>
+
+  <filter id="pf-shadow" x="-8%" y="-8%" width="116%" height="116%">
+    <feDropShadow dx="0" dy="3" stdDeviation="6" flood-color="#000" flood-opacity="0.55"/>
+  </filter>
+  <filter id="pf-glow-sota" x="-25%" y="-25%" width="150%" height="150%">
+    <feGaussianBlur stdDeviation="3.5" result="b"/>
+    <feMerge><feMergeNode in="b"/><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+  </filter>
+  <filter id="pf-glow-title" x="-3%" y="-20%" width="106%" height="140%">
+    <feGaussianBlur stdDeviation="2" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+  </filter>
+
+  <marker id="pf-arr"  viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 2L9 5L0 8Z" fill="#94A3B8"/></marker>
+  <marker id="pf-arr-sota" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 2L9 5L0 8Z" fill="#F59E0B"/></marker>
+  <marker id="pf-arr-gr"  viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 2L9 5L0 8Z" fill="#9333EA"/></marker>
+  <marker id="pf-arr-ev"  viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 2L9 5L0 8Z" fill="#60A5FA"/></marker>
+
+  <pattern id="pf-dots" x="0" y="0" width="22" height="22" patternUnits="userSpaceOnUse">
+    <circle cx="11" cy="11" r="0.9" fill="#334155" fill-opacity="0.6"/>
+  </pattern>
+</defs>
+
+<!-- Background -->
+<rect width="100%" height="100%" fill="url(#pf-bg)" rx="14"/>
+<rect width="100%" height="100%" fill="url(#pf-dots)" rx="14"/>
+
+<!-- Title bar -->
+<rect x="14" y="10" width="1052" height="38" rx="8" fill="#1E293B" fill-opacity="0.9" stroke="#334155"/>
+<text x="540" y="26" text-anchor="middle" font-size="13" font-weight="bold" fill="#F1F5F9" filter="url(#pf-glow-title)">🧬 genome-pocket · Data Flow  —  Target = F(Source)</text>
+<text x="540" y="42" text-anchor="middle" font-size="9.5" fill="#64748B">Declarative · Incremental (Δ-only) · Local-First  ✦  solid = main flow  ·  dashed = opt-in branch</text>
+
+<!-- ══════════════════════════════════════════════════════════════
+     SUBGRAPH BOXES  y=56..356  h=300
+     SRC x=10  REF x=200  XF x=390  LOAD x=590  SERVE x=785
+     ══════════════════════════════════════════════════════════════ -->
+
+<!-- 1 · SOURCE -->
+<g transform="translate(10,56)" filter="url(#pf-shadow)">
+  <rect width="178" height="300" rx="10" fill="url(#pf-src)" stroke="#818CF8" stroke-width="1"/>
+  <rect width="178" height="38" rx="10" fill="#312E81" fill-opacity="0.7"/>
+  <text x="89" y="17" text-anchor="middle" font-size="11" font-weight="bold" fill="#EEF2FF">1 · Source</text>
+  <text x="89" y="31" text-anchor="middle" font-size="8.5" fill="#C7D2FE">LocalFS connector</text>
+  <!-- MD -->
+  <rect x="10" y="48" width="158" height="44" rx="7" fill="#FFF" fill-opacity="0.1" stroke="#A5B4FC" stroke-opacity="0.45" stroke-width="0.8"/>
+  <text x="89" y="67" text-anchor="middle" font-size="10" font-weight="600" fill="#EDE9FE">notes/*.md · *.txt</text>
+  <text x="89" y="82" text-anchor="middle" font-size="8.5" fill="#C4B5FD">Markdown / prose</text>
+  <!-- CODE -->
+  <rect x="10" y="103" width="158" height="44" rx="7" fill="#FFF" fill-opacity="0.1" stroke="#A5B4FC" stroke-opacity="0.45" stroke-width="0.8"/>
+  <text x="89" y="122" text-anchor="middle" font-size="10" font-weight="600" fill="#EDE9FE">code: .py .rs .ts</text>
+  <text x="89" y="137" text-anchor="middle" font-size="8.5" fill="#C4B5FD">.js .go .java …</text>
+  <!-- WATCH -->
+  <rect x="10" y="158" width="158" height="44" rx="7" fill="#3730A3" fill-opacity="0.8"/>
+  <text x="89" y="177" text-anchor="middle" font-size="10" font-weight="bold" fill="#FFF">File Watcher</text>
+  <text x="89" y="192" text-anchor="middle" font-size="8.5" fill="#C7D2FE">live · Δ-only</text>
+  <!-- image opt-in note -->
+  <rect x="10" y="214" width="158" height="36" rx="7" fill="#FFF" fill-opacity="0.05" stroke="#818CF8" stroke-opacity="0.35" stroke-dasharray="4 3" stroke-width="0.8"/>
+  <text x="89" y="230" text-anchor="middle" font-size="8" font-style="italic" fill="#A5B4FC">opt-in: images .png .jpg .webp</text>
+  <text x="89" y="242" text-anchor="middle" font-size="7.5" fill="#818CF8">SigLIP2 multimodal backend</text>
+  <text x="89" y="289" text-anchor="middle" font-size="8" fill="#818CF8" fill-opacity="0.7">watches local dir for changes</text>
+</g>
+
+<!-- 2 · REFINE -->
+<g transform="translate(200,56)" filter="url(#pf-shadow)">
+  <rect width="178" height="300" rx="10" fill="url(#pf-ref)" stroke="#38BDF8" stroke-width="1"/>
+  <rect width="178" height="38" rx="10" fill="#0C4A6E" fill-opacity="0.7"/>
+  <text x="89" y="17" text-anchor="middle" font-size="11" font-weight="bold" fill="#E0F2FE">2 · Refine</text>
+  <text x="89" y="31" text-anchor="middle" font-size="8.5" fill="#BAE6FD">TextRefiner</text>
+  <!-- NORM -->
+  <rect x="10" y="48" width="158" height="68" rx="7" fill="#FFF" fill-opacity="0.1" stroke="#7DD3FC" stroke-opacity="0.4" stroke-width="0.8"/>
+  <text x="89" y="67" text-anchor="middle" font-size="10" font-weight="600" fill="#E0F2FE">normalize</text>
+  <text x="89" y="82" text-anchor="middle" font-size="8.5" fill="#BAE6FD">NFC · CRLF→LF · whitespace</text>
+  <text x="89" y="96" text-anchor="middle" font-size="8.5" fill="#BAE6FD">indent-preserving for code</text>
+  <text x="89" y="109" text-anchor="middle" font-size="8" fill="#7DD3FC" fill-opacity="0.8">strip excess blank lines</text>
+  <!-- OFF -->
+  <rect x="10" y="128" width="158" height="58" rx="7" fill="#FFF" fill-opacity="0.1" stroke="#7DD3FC" stroke-opacity="0.4" stroke-width="0.8"/>
+  <text x="89" y="147" text-anchor="middle" font-size="10" font-weight="600" fill="#E0F2FE">offset map</text>
+  <text x="89" y="162" text-anchor="middle" font-size="8.5" fill="#BAE6FD">lineage → original bytes</text>
+  <text x="89" y="177" text-anchor="middle" font-size="8" fill="#7DD3FC" fill-opacity="0.8">preserves chunk provenance</text>
+  <!-- fingerprint note -->
+  <text x="89" y="215" text-anchor="middle" font-size="8.5" fill="#38BDF8" fill-opacity="0.75">content fingerprint</text>
+  <text x="89" y="229" text-anchor="middle" font-size="8.5" fill="#38BDF8" fill-opacity="0.75">Δ-only: unchanged files skip</text>
+  <text x="89" y="289" text-anchor="middle" font-size="8" fill="#38BDF8" fill-opacity="0.6">normalize · lineage · memo</text>
+</g>
+
+<!-- 3 · TRANSFORM -->
+<g transform="translate(390,56)" filter="url(#pf-shadow)">
+  <rect width="178" height="300" rx="10" fill="url(#pf-xf)" stroke="#60A5FA" stroke-width="1"/>
+  <rect width="178" height="38" rx="10" fill="#1E3A8A" fill-opacity="0.7"/>
+  <text x="89" y="17" text-anchor="middle" font-size="11" font-weight="bold" fill="#DBEAFE">3 · Transform</text>
+  <text x="89" y="31" text-anchor="middle" font-size="8.5" fill="#BFDBFE">PocketIndex ETL</text>
+  <!-- SPLIT -->
+  <rect x="10" y="48" width="158" height="40" rx="7" fill="#FFF" fill-opacity="0.1" stroke="#93C5FD" stroke-opacity="0.4" stroke-width="0.8"/>
+  <text x="89" y="65" text-anchor="middle" font-size="10" font-weight="600" fill="#DBEAFE">RecursiveSplitter</text>
+  <text x="89" y="80" text-anchor="middle" font-size="8.5" fill="#93C5FD">code-aware · lang detect</text>
+  <!-- dashed SPLIT→SEMSPLIT (POCKET_SEMANTIC_SPLIT) -->
+  <path d="M 89 88 L 89 100" stroke="#F59E0B" stroke-width="1.2" stroke-dasharray="3 2" marker-end="url(#pf-arr-sota)" fill="none"/>
+  <!-- SEMSPLIT SOTA -->
+  <g filter="url(#pf-glow-sota)">
+    <rect x="10" y="100" width="158" height="50" rx="7" fill="#1C1917" stroke="#F59E0B" stroke-width="1.5"/>
+    <rect x="120" y="103" width="40" height="13" rx="3" fill="#F59E0B"/>
+    <text x="140" y="113" text-anchor="middle" font-size="7" font-weight="bold" fill="#1C1917">OPT-IN</text>
+    <text x="89" y="121" text-anchor="middle" font-size="10" font-weight="bold" fill="#FDE68A">⚡ SemanticSplitter</text>
+    <text x="89" y="136" text-anchor="middle" font-size="8.5" fill="#FCD34D">embedding-guided boundary</text>
+    <text x="89" y="148" text-anchor="middle" font-size="7.5" fill="#F59E0B" fill-opacity="0.8">POCKET_SEMANTIC_SPLIT=1</text>
+  </g>
+  <!-- EMB -->
+  <rect x="10" y="162" width="158" height="44" rx="7" fill="#FFF" fill-opacity="0.1" stroke="#93C5FD" stroke-opacity="0.4" stroke-width="0.8"/>
+  <text x="89" y="181" text-anchor="middle" font-size="10" font-weight="600" fill="#DBEAFE">SentenceTransformer</text>
+  <text x="89" y="196" text-anchor="middle" font-size="8.5" fill="#93C5FD">Qwen3-0.6B · SigLIP2</text>
+  <!-- IDG -->
+  <rect x="10" y="218" width="158" height="38" rx="7" fill="#1E3A8A" fill-opacity="0.75"/>
+  <text x="89" y="235" text-anchor="middle" font-size="10" font-weight="600" fill="#DBEAFE">IdGenerator</text>
+  <text x="89" y="249" text-anchor="middle" font-size="8.5" fill="#93C5FD">deterministic · memoized</text>
+  <text x="89" y="289" text-anchor="middle" font-size="8" fill="#60A5FA" fill-opacity="0.6">split · embed · id · memo</text>
+</g>
+
+<!-- 4 · LOAD -->
+<g transform="translate(590,56)" filter="url(#pf-shadow)">
+  <rect width="178" height="300" rx="10" fill="url(#pf-ld)" stroke="#34D399" stroke-width="1"/>
+  <rect width="178" height="38" rx="10" fill="#022C22" fill-opacity="0.7"/>
+  <text x="89" y="17" text-anchor="middle" font-size="11" font-weight="bold" fill="#D1FAE5">4 · Load</text>
+  <text x="89" y="31" text-anchor="middle" font-size="8.5" fill="#A7F3D0">SQLite target</text>
+  <!-- VEC -->
+  <rect x="10" y="48" width="158" height="44" rx="7" fill="#FFF" fill-opacity="0.1" stroke="#6EE7B7" stroke-opacity="0.4" stroke-width="0.8"/>
+  <text x="89" y="67" text-anchor="middle" font-size="10" font-weight="600" fill="#D1FAE5">sqlite-vec</text>
+  <text x="89" y="82" text-anchor="middle" font-size="8.5" fill="#6EE7B7">vector · cosine similarity</text>
+  <!-- FTS -->
+  <rect x="10" y="103" width="158" height="44" rx="7" fill="#FFF" fill-opacity="0.1" stroke="#6EE7B7" stroke-opacity="0.4" stroke-width="0.8"/>
+  <text x="89" y="122" text-anchor="middle" font-size="10" font-weight="600" fill="#D1FAE5">FTS5 index</text>
+  <text x="89" y="137" text-anchor="middle" font-size="8.5" fill="#6EE7B7">lexical · BM25 ranking</text>
+  <!-- LIN -->
+  <rect x="10" y="158" width="158" height="44" rx="7" fill="#022C22" fill-opacity="0.8"/>
+  <text x="89" y="177" text-anchor="middle" font-size="10" font-weight="bold" fill="#D1FAE5">lineage · memo</text>
+  <text x="89" y="192" text-anchor="middle" font-size="8.5" fill="#6EE7B7">auto-sync · Δ cleanup</text>
+  <text x="89" y="289" text-anchor="middle" font-size="8" fill="#34D399" fill-opacity="0.6">upsert · delete sweep</text>
+</g>
+
+<!-- 5 · SERVE -->
+<g transform="translate(785,56)" filter="url(#pf-shadow)">
+  <rect width="278" height="300" rx="10" fill="url(#pf-sv)" stroke="#FCD34D" stroke-width="1"/>
+  <rect width="278" height="38" rx="10" fill="#451A03" fill-opacity="0.7"/>
+  <text x="139" y="17" text-anchor="middle" font-size="11" font-weight="bold" fill="#FEF3C7">5 · Serve</text>
+  <text x="139" y="31" text-anchor="middle" font-size="8.5" fill="#FDE68A">retrieval.py</text>
+  <!-- HYDE SOTA -->
+  <g filter="url(#pf-glow-sota)">
+    <rect x="10" y="44" width="258" height="50" rx="7" fill="#1C1917" stroke="#F59E0B" stroke-width="1.5"/>
+    <rect x="208" y="47" width="52" height="13" rx="3" fill="#F59E0B"/>
+    <text x="234" y="57" text-anchor="middle" font-size="7" font-weight="bold" fill="#1C1917">OPT-IN</text>
+    <text x="139" y="65" text-anchor="middle" font-size="10" font-weight="bold" fill="#FDE68A">⚡ HyDE expansion</text>
+    <text x="139" y="79" text-anchor="middle" font-size="8.5" fill="#FCD34D">Ollama → hypothetical doc → embed</text>
+    <text x="139" y="91" text-anchor="middle" font-size="7.5" fill="#F59E0B" fill-opacity="0.8">POCKET_HYDE=1 / --hyde</text>
+  </g>
+  <!-- HYDE→RRF internal dashed -->
+  <path d="M 139 94 L 139 107" stroke="#F59E0B" stroke-width="1.2" stroke-dasharray="3 2" marker-end="url(#pf-arr-sota)" fill="none"/>
+  <!-- RRF -->
+  <rect x="10" y="107" width="258" height="40" rx="7" fill="#FFF" fill-opacity="0.12" stroke="#FDE68A" stroke-opacity="0.4" stroke-width="0.8"/>
+  <text x="139" y="124" text-anchor="middle" font-size="10" font-weight="600" fill="#FEF3C7">Hybrid retrieval · RRF</text>
+  <text x="139" y="139" text-anchor="middle" font-size="8.5" fill="#FCD34D">vector + lexical (+ graph) · Reciprocal Rank Fusion</text>
+  <!-- RRF→RERANK solid -->
+  <path d="M 139 147 L 139 158" stroke="#94A3B8" stroke-width="1.5" marker-end="url(#pf-arr)" fill="none"/>
+  <!-- RERANK SOTA -->
+  <g filter="url(#pf-glow-sota)">
+    <rect x="10" y="158" width="258" height="52" rx="7" fill="#1C1917" stroke="#F59E0B" stroke-width="1.5"/>
+    <rect x="208" y="161" width="52" height="13" rx="3" fill="#F59E0B"/>
+    <text x="234" y="171" text-anchor="middle" font-size="7" font-weight="bold" fill="#1C1917">OPT-IN</text>
+    <text x="139" y="179" text-anchor="middle" font-size="10" font-weight="bold" fill="#FDE68A">⚡ Cross-encoder Reranker</text>
+    <text x="139" y="194" text-anchor="middle" font-size="8.5" fill="#FCD34D">ms-marco-MiniLM · +5–15% MRR</text>
+    <text x="139" y="207" text-anchor="middle" font-size="7.5" fill="#F59E0B" fill-opacity="0.8">POCKET_RERANKER=1 / --rerank</text>
+  </g>
+  <!-- RERANK→Surfaces solid -->
+  <path d="M 139 210 L 139 222" stroke="#94A3B8" stroke-width="1.5" marker-end="url(#pf-arr)" fill="none"/>
+  <!-- Surfaces group -->
+  <rect x="10" y="222" width="258" height="50" rx="7" fill="#451A03" fill-opacity="0.85" stroke="#FDE68A" stroke-opacity="0.25" stroke-width="0.8"/>
+  <text x="139" y="237" text-anchor="middle" font-size="8.5" font-weight="bold" fill="#FEF3C7">Surfaces</text>
+  <!-- CLI MCP API mini nodes -->
+  <rect x="18" y="243" width="72" height="22" rx="5" fill="#FFF" fill-opacity="0.1" stroke="#FDE68A" stroke-opacity="0.4" stroke-width="0.7"/>
+  <text x="54" y="258" text-anchor="middle" font-size="8.5" font-weight="600" fill="#FEF3C7">CLI</text>
+  <rect x="103" y="243" width="72" height="22" rx="5" fill="#FFF" fill-opacity="0.1" stroke="#FDE68A" stroke-opacity="0.4" stroke-width="0.7"/>
+  <text x="139" y="258" text-anchor="middle" font-size="8.5" font-weight="600" fill="#FEF3C7">MCP</text>
+  <rect x="188" y="243" width="72" height="22" rx="5" fill="#FFF" fill-opacity="0.1" stroke="#FDE68A" stroke-opacity="0.4" stroke-width="0.7"/>
+  <text x="224" y="258" text-anchor="middle" font-size="8.5" font-weight="600" fill="#FEF3C7">REST+UI</text>
+  <text x="139" y="289" text-anchor="middle" font-size="8" fill="#FCD34D" fill-opacity="0.6">fuse · rerank · surface</text>
+</g>
+
+<!-- ══════════════════════════════════════════════════════════════
+     MAIN PIPELINE ARROWS  y=206 (56+150)
+     ══════════════════════════════════════════════════════════════ -->
+<line x1="190" y1="206" x2="198" y2="206" stroke="#94A3B8" stroke-width="2.5" marker-end="url(#pf-arr)"/>
+<line x1="380" y1="206" x2="388" y2="206" stroke="#94A3B8" stroke-width="2.5" marker-end="url(#pf-arr)"/>
+<line x1="570" y1="206" x2="578" y2="206" stroke="#94A3B8" stroke-width="2.5" marker-end="url(#pf-arr)"/>
+<line x1="770" y1="206" x2="783" y2="206" stroke="#94A3B8" stroke-width="2.5" marker-end="url(#pf-arr)"/>
+
+<!-- ══════════════════════════════════════════════════════════════
+     BOTTOM BOXES  y=376
+     EVAL x=10 w=375 h=108
+     GRAPH x=400 w=668 h=108
+     ══════════════════════════════════════════════════════════════ -->
+
+<!-- EVAL -->
+<g transform="translate(10,376)" filter="url(#pf-shadow)">
+  <rect width="375" height="108" rx="10" fill="url(#pf-ev)" stroke="#60A5FA" stroke-width="1"/>
+  <rect width="375" height="34" rx="10" fill="#0F2044" fill-opacity="0.8"/>
+  <text x="187" y="17" text-anchor="middle" font-size="11" font-weight="bold" fill="#DBEAFE">📊 pocket eval — Regression Harness</text>
+  <text x="187" y="30" text-anchor="middle" font-size="8.5" fill="#93C5FD">same retrieval.search path · never drifts from production</text>
+  <text x="187" y="52" text-anchor="middle" font-size="9.5" fill="#BFDBFE">Hit@k · MRR · Precision@k · Recall@k · MAP@k</text>
+  <text x="187" y="67" text-anchor="middle" font-size="9" fill="#93C5FD">synthetic or gold cases · baseline compare · CI gate</text>
+  <g filter="url(#pf-glow-sota)">
+    <rect x="28" y="78" width="319" height="22" rx="6" fill="#1C1917" stroke="#F59E0B" stroke-width="1.4"/>
+    <text x="187" y="93" text-anchor="middle" font-size="9" font-weight="bold" fill="#FDE68A">⚡ LLM-as-Judge  ·  --with-judge  ·  Faithfulness + Relevance</text>
+  </g>
+</g>
+
+<!-- GRAPH -->
+<g transform="translate(400,376)" filter="url(#pf-shadow)">
+  <rect width="668" height="108" rx="10" fill="url(#pf-gr)" stroke="#C084FC" stroke-width="1"/>
+  <rect width="668" height="34" rx="10" fill="#2E1065" fill-opacity="0.85"/>
+  <text x="334" y="17" text-anchor="middle" font-size="11" font-weight="bold" fill="#F3E8FF">🕸️ Knowledge Graph — optional branch (GraphRAG)</text>
+  <text x="334" y="30" text-anchor="middle" font-size="8.5" fill="#C4B5FD">pocket update --graph · POCKET_GRAPH=1  ·  same Δ lineage/memo sweep</text>
+  <text x="334" y="52" text-anchor="middle" font-size="9.5" fill="#DDD6FE">extractor: deterministic (offline) | ollama | airllm  ·  entities + relations tables</text>
+  <text x="334" y="67" text-anchor="middle" font-size="9" fill="#C4B5FD">pocket graph "Pocket" --limit 20  ·  augments Hybrid RRF with graph neighbours</text>
+  <g filter="url(#pf-glow-sota)">
+    <rect x="68" y="78" width="532" height="22" rx="6" fill="#1C1917" stroke="#F59E0B" stroke-width="1.4"/>
+    <text x="334" y="93" text-anchor="middle" font-size="9" font-weight="bold" fill="#FDE68A">⚡ Schema-constrained JSON extraction  ·  Ollama ≥ 0.3.0  format:{schema}  ·  grammar-constrained decoding</text>
+  </g>
+</g>
+
+<!-- ══════════════════════════════════════════════════════════════
+     CROSS-SECTION ARROWS
+     ══════════════════════════════════════════════════════════════ -->
+<!-- XF→GRAPH  (dashed purple, vertical from XF bottom to GRAPH top) -->
+<path d="M 479 356 L 479 375" stroke="#9333EA" stroke-width="1.5" stroke-dasharray="5 3" marker-end="url(#pf-arr-gr)" fill="none"/>
+<text x="484" y="368" font-size="7.5" fill="#9333EA" fill-opacity="0.85">--graph</text>
+
+<!-- GRAPH→LOAD  (dashed purple, from GRAPH top to LOAD bottom) -->
+<path d="M 672 376 L 672 357" stroke="#9333EA" stroke-width="1.5" stroke-dasharray="5 3" marker-end="url(#pf-arr-gr)" fill="none"/>
+<text x="677" y="370" font-size="7.5" fill="#9333EA" fill-opacity="0.85">extract</text>
+
+<!-- SERVE→EVAL  (dashed blue, sweep left then down) -->
+<path d="M 924 356 L 924 364 L 193 364 L 193 375" stroke="#60A5FA" stroke-width="1.5" stroke-dasharray="5 3" marker-end="url(#pf-arr-ev)" fill="none"/>
+<text x="560" y="362" text-anchor="middle" font-size="7.5" fill="#60A5FA" fill-opacity="0.85">scores</text>
+
+<!-- GRAPH augments serve label (avoiding complex routing) -->
+<text x="852" y="370" text-anchor="middle" font-size="7.5" fill="#9333EA" fill-opacity="0.85">↑ augments RRF</text>
+<path d="M 852 374 L 852 357" stroke="#9333EA" stroke-width="1.2" stroke-dasharray="4 3" marker-end="url(#pf-arr-gr)" fill="none"/>
+
+<!-- ══════════════════════════════════════════════════════════════
+     LEGEND
+     ══════════════════════════════════════════════════════════════ -->
+<rect x="10" y="496" width="1058" height="40" rx="7" fill="#1E293B" fill-opacity="0.7" stroke="#334155" stroke-width="0.8"/>
+<!-- solid -->
+<line x1="24" y1="516" x2="58" y2="516" stroke="#94A3B8" stroke-width="2.2" marker-end="url(#pf-arr)"/>
+<text x="65" y="520" font-size="8.5" fill="#94A3B8">main pipeline</text>
+<!-- dashed sota -->
+<line x1="148" y1="516" x2="182" y2="516" stroke="#F59E0B" stroke-width="1.5" stroke-dasharray="4 2" marker-end="url(#pf-arr-sota)"/>
+<text x="190" y="520" font-size="8.5" fill="#F59E0B">opt-in SOTA path (⚡)</text>
+<!-- dashed purple -->
+<line x1="308" y1="516" x2="342" y2="516" stroke="#9333EA" stroke-width="1.5" stroke-dasharray="4 2" marker-end="url(#pf-arr-gr)"/>
+<text x="350" y="520" font-size="8.5" fill="#9333EA">graph branch</text>
+<!-- dashed blue -->
+<line x1="436" y1="516" x2="470" y2="516" stroke="#60A5FA" stroke-width="1.5" stroke-dasharray="4 2" marker-end="url(#pf-arr-ev)"/>
+<text x="478" y="520" font-size="8.5" fill="#60A5FA">eval feedback</text>
+<!-- sota badge -->
+<rect x="558" y="508" width="56" height="16" rx="4" fill="#1C1917" stroke="#F59E0B" stroke-width="1"/>
+<text x="586" y="520" text-anchor="middle" font-size="8" font-weight="bold" fill="#FDE68A">⚡ OPT-IN</text>
+<text x="622" y="520" font-size="8.5" fill="#F59E0B">= 2026 SOTA (all backward-compatible, default OFF)</text>
+<text x="1068" y="520" text-anchor="end" font-size="8" fill="#475569">pocketindex vendored engine</text>
+
+<!-- Footer -->
+<text x="540" y="556" text-anchor="middle" font-size="8.5" fill="#334155">Self-contained · no external pip ETL dependency  ·  genome-pocket © MIT</text>
+</svg>

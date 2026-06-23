@@ -383,6 +383,50 @@ class MemoizingExtractor:
         return result
 
 
+# --------------------------------------------------------------------------- #
+# JSON Schema for Ollama structured-output (Ollama ≥ 0.3.0).
+#
+# Passing a full JSON Schema object as ``"format"`` grammar-constrains the
+# model at decode time rather than just asking it nicely in the prompt.
+# The difference on small local models is stark: naive "return JSON" prompts
+# score ~0% schema compliance while grammar-constrained decoding reaches ~100%
+# (arXiv:2605.02363).  We try the schema path first; on a 400 response (older
+# Ollama that only understands ``"format": "json"``) we fall back and remember
+# the capability level for the lifetime of this extractor instance.
+# --------------------------------------------------------------------------- #
+_EXTRACTION_JSON_SCHEMA: dict = {
+    "type": "object",
+    "properties": {
+        "entities": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "name":       {"type": "string"},
+                    "type":       {"type": "string"},
+                    "confidence": {"type": "number"},
+                    "evidence":   {"type": "string"},
+                },
+                "required": ["name", "type", "confidence", "evidence"],
+            },
+        },
+        "relations": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "subject":    {"type": "string"},
+                    "predicate":  {"type": "string"},
+                    "object":     {"type": "string"},
+                    "confidence": {"type": "number"},
+                    "evidence":   {"type": "string"},
+                },
+                "required": ["subject", "predicate", "object", "confidence", "evidence"],
+            },
+        },
+    },
+    "required": ["entities", "relations"],
+}
 
 # --------------------------------------------------------------------------- #
 # Backend 2: Ollama (local HTTP daemon).
@@ -390,8 +434,17 @@ class MemoizingExtractor:
 class OllamaExtractor:
     """Extract via a local Ollama daemon (``/api/generate``).
 
-    Uses only the stdlib so the base install stays dependency-light. Any network,
-    HTTP, or JSON error degrades to an empty extraction (logged), never a crash.
+    Uses only the stdlib so the base install stays dependency-light. Any
+    network, HTTP, or JSON error degrades to an empty extraction (logged),
+    never a crash.
+
+    **Structured output** (Ollama ≥ 0.3.0): on the first call, the extractor
+    tries passing the full ``_EXTRACTION_JSON_SCHEMA`` as the ``format``
+    parameter — this grammar-constrains the model at the token-sampling level,
+    yielding schema-valid JSON regardless of model size or prompt phrasing.  A
+    ``400`` response means the server pre-dates structured-output support; the
+    extractor remembers that and falls back to ``"format": "json"`` (any valid
+    JSON object) for subsequent calls, matching the pre-2026 behaviour.
     """
 
     name = "ollama"
@@ -400,14 +453,75 @@ class OllamaExtractor:
         self.model = model
         self.host = (host or os.getenv("OLLAMA_HOST") or "http://127.0.0.1:11434").rstrip("/")
         self.timeout = timeout
+        # Tri-state: None = not yet probed, True = schema mode works, False = fallback.
+        self._schema_supported: bool | None = None
 
     def extract(self, text: str) -> Extraction:
+        # Attempt schema-constrained path first.  On the initial call
+        # _schema_supported is None (unknown); _extract_schema returns None on
+        # a 400, which flips the flag to False so we never retry.
+        if self._schema_supported is not False:
+            result = self._extract_schema(text)
+            if result is not None:
+                return result
+        return self._extract_json(text)
+
+    def _extract_schema(self, text: str) -> "Extraction | None":
+        """Schema-constrained path (Ollama ≥ 0.3.0).
+
+        Returns ``None`` on HTTP 400 (unsupported ``format`` object) so the
+        caller knows to permanently switch to the legacy ``"json"`` mode.
+        Returns an empty :class:`Extraction` (not ``None``) on other errors
+        so the caller does *not* re-try via the legacy path (the daemon is
+        reachable; the response was just unparseable).
+        """
         import urllib.error
         import urllib.request
 
         payload = json.dumps(
             {
-                "model": self.model,
+                "model":  self.model,
+                "prompt": _EXTRACTION_PROMPT + text,
+                "stream": False,
+                "format": _EXTRACTION_JSON_SCHEMA,
+            }
+        ).encode("utf-8")
+        req = urllib.request.Request(
+            f"{self.host}/api/generate",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                body = json.loads(resp.read().decode("utf-8"))
+            self._schema_supported = True
+            return parse_extraction_json(body.get("response", ""), evidence=text[:500])
+        except urllib.error.HTTPError as exc:
+            if exc.code == 400:
+                print(
+                    "[pocketindex.extract] Ollama structured-output (schema format) "
+                    "not supported by this server — falling back to plain JSON mode. "
+                    "Upgrade Ollama to ≥ 0.3.0 for grammar-constrained decoding."
+                )
+                self._schema_supported = False
+                return None  # signal: retry via legacy path
+            print(
+                f"[pocketindex.extract] Ollama schema extraction HTTP {exc.code}, "
+                f"skipping chunk: {exc}"
+            )
+            return Extraction()  # non-400 HTTP error → empty result, don't retry
+        except (urllib.error.URLError, OSError, ValueError, json.JSONDecodeError) as exc:
+            print(f"[pocketindex.extract] Ollama schema extraction failed, skipping chunk: {exc}")
+            return Extraction()
+
+    def _extract_json(self, text: str) -> "Extraction":
+        """Legacy path: ``\"format\": \"json\"`` (any structurally valid JSON object)."""
+        import urllib.error
+        import urllib.request
+
+        payload = json.dumps(
+            {
+                "model":  self.model,
                 "prompt": _EXTRACTION_PROMPT + text,
                 "stream": False,
                 "format": "json",
@@ -425,6 +539,7 @@ class OllamaExtractor:
         except (urllib.error.URLError, OSError, ValueError, json.JSONDecodeError) as exc:
             print(f"[pocketindex.extract] Ollama extraction failed, skipping chunk: {exc}")
             return Extraction()
+
 
 
 # --------------------------------------------------------------------------- #

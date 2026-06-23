@@ -68,6 +68,13 @@ INDEX_HTML = """<!DOCTYPE html>
          opacity: 0.7; }
   .status { opacity: 0.7; margin: 1rem 0; }
   .error { color: #ef4444; }
+  section.review { margin-top: 2.5rem; border-top: 1px solid #8883; padding-top: 1rem; }
+  .review-btn { font-size: 0.78rem; padding: 0.2rem 0.7rem; margin-right: 0.4rem;
+         background: #22c55e; }
+  .review-btn.reject { background: #ef4444; }
+  .pending-item .top { align-items: baseline; }
+  .conf { font-variant-numeric: tabular-nums; opacity: 0.8; font-size: 0.85rem; }
+  .pred { font-style: italic; opacity: 0.85; }
 </style>
 </head>
 <body>
@@ -79,6 +86,7 @@ INDEX_HTML = """<!DOCTYPE html>
     <input type="text" id="q" placeholder="Ask the knowledge base…" autofocus />
     <select id="mode">
       <option value="hybrid">hybrid</option>
+      <option value="auto">auto</option>
       <option value="vector">vector</option>
       <option value="lexical">lexical</option>
       <option value="graph">graph</option>
@@ -90,6 +98,19 @@ INDEX_HTML = """<!DOCTYPE html>
   <div id="route" class="route"></div>
   <div id="status" class="status"></div>
   <div id="results"></div>
+
+  <section class="review">
+    <h1>Pending review</h1>
+    <p class="sub">Low-confidence graph facts the HITL gate staged instead of
+       committing. Approve to admit them into retrieval, or reject to discard.</p>
+    <form id="reviewForm">
+      <button type="submit" id="loadPending">Load pending facts</button>
+      <button type="button" id="approveAll" hidden>Approve all</button>
+      <button type="button" id="rejectAll" hidden>Reject all</button>
+    </form>
+    <div id="reviewStatus" class="status"></div>
+    <div id="pending"></div>
+  </section>
 
 <script>
 const $ = (id) => document.getElementById(id);
@@ -193,6 +214,78 @@ $("f").addEventListener("submit", async (ev) => {
     $("go").disabled = false;
   }
 });
+
+// ---- Pending review (POCKET-505) --------------------------------------------
+function setReviewStatus(text, isError) {
+  $("reviewStatus").textContent = text;
+  $("reviewStatus").className = isError ? "status error" : "status";
+}
+
+function pendingItem(kind, id, label, conf, src) {
+  return `<div class="hit pending-item" data-id="${esc(id)}">
+    <div class="top">
+      <span class="file">${label}</span>
+      <span class="conf">conf ${Number(conf).toFixed(3)}</span>
+    </div>
+    <div class="meta">${esc(kind)}${src ? " &middot; " + esc(src) : ""}</div>
+    <div class="tags">
+      <button class="review-btn" data-act="approve" data-id="${esc(id)}">approve</button>
+      <button class="review-btn reject" data-act="reject" data-id="${esc(id)}">reject</button>
+    </div>
+  </div>`;
+}
+
+function renderPending(d) {
+  const ents = d.entities || [];
+  const rels = d.relations || [];
+  const total = ents.length + rels.length;
+  $("approveAll").hidden = total === 0;
+  $("rejectAll").hidden = total === 0;
+  setReviewStatus(total
+    ? `${total} fact(s) awaiting review` : "No facts pending review.", false);
+  const items = ents.map((e) => pendingItem("entity", e.id,
+      `${esc(e.name)} <span class="meta">(${esc(e.type)})</span>`,
+      e.confidence, e.source_file))
+    .concat(rels.map((r) => pendingItem("relation", r.id,
+      `${esc(r.subject)} <span class="pred">${esc(r.predicate)}</span> ` +
+      `${esc(r.object)}`, r.confidence, r.source_file)));
+  $("pending").innerHTML = items.join("");
+  document.querySelectorAll(".review-btn").forEach((b) => {
+    b.addEventListener("click", () => review(b.dataset.act, [b.dataset.id]));
+  });
+}
+
+async function loadPending() {
+  setReviewStatus("Loading…", false);
+  try {
+    const r = await fetch("/pending");
+    const d = await r.json();
+    if (!r.ok) { setReviewStatus(d.error || "error", true); return; }
+    renderPending(d);
+  } catch (e) {
+    setReviewStatus(e.message, true);
+  }
+}
+
+async function review(action, ids) {
+  setReviewStatus("Submitting…", false);
+  try {
+    const r = await fetch("/pending/" + action, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ids }),
+    });
+    const d = await r.json();
+    if (!r.ok) { setReviewStatus(d.error || "error", true); return; }
+    loadPending();
+  } catch (e) {
+    setReviewStatus(e.message, true);
+  }
+}
+
+$("reviewForm").addEventListener("submit", (ev) => { ev.preventDefault(); loadPending(); });
+$("approveAll").addEventListener("click", () => review("approve", null));
+$("rejectAll").addEventListener("click", () => review("reject", null));
 </script>
 </body>
 </html>

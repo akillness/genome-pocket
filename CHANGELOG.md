@@ -12,6 +12,183 @@ by installing it in an isolated venv and diffing its public API against the
 vendored `pocketindex` engine.
 
 ### Added
+- **State-diff delta writes in the SQLite target (POCKET-P4).** `TableTarget`
+  previously re-UPSERTed *every* row a source re-emitted on reprocess and
+  delete-reinserted its FTS5 companion row each time, so editing one paragraph of
+  a file rewrote all of its chunks. `declare_row` now fingerprints the desired
+  non-key values, reads the stored row's fingerprint, and asks
+  `cocoindex.connectorkits.statediff.diff` for the write action — `insert` for a
+  new key, `replace` when the stored row differs, and a no-op skip when it has
+  already converged (with a built-in fallback when cocoindex is absent). Skipped
+  rows are still attributed to their source so `end_source` never mistakes them
+  for orphans and sweeps them. The orphan-deletion half of the cocoindex C2 gap
+  (stale chunks accumulating on edits) was already handled by `end_source`/`sweep`;
+  this pass closes the other half — write amplification and FTS churn on the rows
+  that did *not* change. `UpdateStats`/`ComponentStats` gained `num_row_writes`
+  and `num_row_skips` (surfaced in `__str__` as `row_writes`/`row_skips`) so a run
+  reports how many physical rows it actually touched. Tests: three new in
+  `tests/test_pipeline.py` (statediff `insert`/skip/`replace` decision,
+  per-row skip-on-redeclare with orphan-survival, and an end-to-end forced
+  reprocess that writes 0 / skips all rows) — suite now 162.
+- **Graded-corpus eval proof for the fusion features (POCKET-501/502 follow-up).**
+  Until now MMR and weighted RRF were proven only as mechanics — the offline
+  `MockEmbedder` emits zero vectors, so no real cosine signal reached the
+  retrieval path end to end. Added a shipped graded corpus (`eval/corpus/` +
+  hand-labelled `eval/gold.json` with multi-relevant hybrid queries) and a
+  deterministic offline `HashingEmbedder` (L2-normalised hashed bag of words, no
+  model download) so the harness measures an actual quality delta. New measured
+  results on hybrid queries: MMR raises Recall@3 from 0.5→1.0 on a query whose
+  second distinct answer is buried by near-duplicate chunks, and
+  `tune_weights` lifts MAP above the equal-weight baseline by down-weighting a
+  vector strategy that favours keyword-dense distractors. The harness gained the
+  plumbing to measure this: `evaluation.evaluate(..., use_mmr=, mmr_lambda=)` and
+  `pocket eval --mmr/--no-mmr` let you A/B the MMR diversity trade-off from the
+  command line instead of only via `POCKET_MMR`. Tests: `tests/test_eval_proof.py`
+  (gold/corpus label integrity, retrievability floor, MMR Recall@k win, tuner
+  MAP win + vector down-weighting, and the `--mmr` CLI path) — 5 new.
+
+- **Coordinate-ascent weight search (POCKET-502 refinement).** `tune_weights`
+  gained a `method=` parameter: the exhaustive `"grid"` (default, unchanged) or a
+  cheaper `"coordinate"` ascent that optimises one strategy at a time, holding the
+  others fixed, and repeats full passes until one yields no improvement
+  (`max_passes`, default 3). Scored points are memoised so revisits are free, and
+  `1.0` is still always probed so the result is never worse than plain RRF. On the
+  3-strategy hybrid surface this reaches the grid's optimum with strictly fewer
+  `evaluate` calls; exposed as `pocket eval --tune --tune-method {grid,coordinate}`.
+  Tests: coordinate ascent matches the grid optimum more cheaply on both the
+  graded corpus and a synthetic lexical suite, plus method validation and the new
+  CLI flag — 4 new.
+
+- **Query expansion (POCKET-503).** Opt-in, deterministic, offline. When
+  `POCKET_QUERY_EXPANSION` is truthy (or `pocket search --expand` /
+  `pocket eval --expand`), retrieval augments the query with synonym/acronym
+  expansion terms from a built-in map (`config.POCKET_QUERY_EXPANSION_MAP`,
+  overridable via a `POCKET_QUERY_EXPANSION_FILE` JSON) before fusion, so a query
+  phrased with an abbreviation (`wal`) can still reach a document that only spells
+  out the long form (`write ahead log`). The new `retrieval._expand_query` only
+  *appends* missing words (BM25 rank and vector mass of the original tokens are
+  preserved) and de-duplicates deterministically, so the default (flag off) is a
+  strict no-op. The lift is measured on the graded corpus: a new two-answer gold
+  case pairs `db_journal.md` (matches the spelled-out terms) with `db_wal.md`
+  (whose only hook is the long form of `wal`, present in no document), and
+  expansion raises Recall@3 from 0.5→1.0 by recovering the abbreviation-only file
+  while the hit-rate floor holds either way. Threaded through
+  `evaluation.evaluate(..., use_expansion=)` and exposed on the CLI as
+  `pocket search/eval --expand/--no-expand`. Tests: `_expand_query` determinism /
+  dedup / no-op / case-insensitivity / file override, the graded-corpus Recall@k
+  win, and the `--expand` CLI path — 7 new.
+
+- **Semantic query router (POCKET-504).** Opt-in, deterministic, offline. A new
+  `mode="auto"` (and `pocket search --mode auto`, `GET /search?mode=auto`,
+  `/trace?mode=auto`) picks a concrete retrieval mode from the query's *shape*
+  instead of always fanning out every strategy: code-shaped queries (snake_case /
+  camelCase identifiers, `foo()` calls, `::` scopes, `filename.ext`, code
+  punctuation, backtick spans) route to **lexical** exact-match; relationship /
+  concept questions ("how does X relate to Y", "connection between …") route to
+  **graph** multi-hop; everything else keeps the **hybrid** blend. The classifier
+  `retrieval._route_query` is a pure regex/keyword shape check (no model call), so
+  routing is reproducible and unit-testable; `_resolve_mode` downgrades a routed
+  `graph` to `hybrid` when the target has no graph tables, so routing never
+  silently returns zero results. Setting `POCKET_QUERY_ROUTER=1` also auto-routes
+  a plain `hybrid` call (the default mode), so existing callers get the right
+  blend without changing their call site; default OFF keeps `hybrid` a fixed blend.
+  The lift is measured on the graded corpus: a new code-shaped gold case
+  (`router_anchor.md` + `router_blend_a/b/c.md`, `mode="auto"`) routes to lexical
+  and ranks the exact-match answer #1 (MAP=1.0) where plain hybrid lets a
+  vector-favoured distractor outrank it — a measured ranking win at an unchanged
+  Recall@k floor. Tests: shape-classification battery, the auto-vs-hybrid MAP win
+  + lexical-route equivalence, the `POCKET_QUERY_ROUTER` flag upgrade, the
+  graph→hybrid fallback, the `--mode auto` CLI path, and `routing_trace` / `/trace`
+  auto routing — 7 new.
+
+- **HITL pending-review in the Web UI + REST (POCKET-505).** The confidence gate
+  (`POCKET_GRAPH_MIN_CONFIDENCE`) stages low-confidence graph facts as
+  `status="pending"`, but until now they were reviewable only through the CLI
+  (`pocket graph review`). Surfaced the same `admin.list_pending/approve_pending/
+  reject_pending` queue over HTTP and in the dependency-free Web UI: `GET /pending`
+  lists staged entities/relations, and `POST /pending/approve` / `POST /pending/reject`
+  commit or discard them (JSON `{"ids": [...]}` for specific facts, omit `ids` /
+  send `null` for all). The Web UI gained a **Pending review** panel that loads the
+  queue and exposes per-fact and bulk approve/reject buttons (and the mode picker
+  now also lists the POCKET-504 `auto` router). Entity/relation ids are signed
+  64-bit hashes that exceed JavaScript's safe-integer range (2**53), so the REST
+  layer speaks ids as **decimal strings** (`_stringify_pending` on the way out,
+  `_parse_ids` back to int on the way in) — the Python CLI/admin layer keeps using
+  native ints. Tests: listing surfaces only pending rows with string ids and
+  join-resolved relation endpoints, a >2**53 id survives the approve round-trip
+  (a float64-rounded neighbour would miss it), reject deletes the rows and their
+  FTS mirror, action/id validation (404 / 400), the missing-index 503 guard, and
+  the Web UI markup — 6 new.
+
+- **Weighted / tunable Reciprocal Rank Fusion (POCKET-502).** RRF used to fuse
+  every strategy with equal weight; `_fold_ranked`/`_fuse`/`_fuse_ranked`/`search`
+  now take per-strategy `weights` (`{vector, lexical, graph}`) so each strategy's
+  reciprocal-rank contribution can be scaled (`weight·1/(RRF_K+rank)`). Defaults
+  are 1.0 each (`config.POCKET_RRF_WEIGHTS`, from `POCKET_RRF_{VECTOR,LEXICAL,GRAPH}_WEIGHT`),
+  so behaviour is identical to plain RRF until tuned; negative weights clamp to 0
+  (disable, never invert). The eval harness becomes an **optimizer**:
+  `evaluation.tune_weights` grid-searches the weights against real retrieval
+  (`pocket eval --tune [--tune-metric M] [--save-weights FILE]`), varying only the
+  strategies the cases' modes exercise, always probing 1.0 so it can never land
+  below the equal-weight baseline, and breaking ties toward the baseline. The
+  winner is persisted via `save_weights`/`load_weights`; pointing
+  `POCKET_RRF_WEIGHTS_FILE` at that file feeds it back into `config` (overriding
+  the env defaults), closing the tune→apply loop for search and eval alike.
+  Tests: weight-resolution defaults/merge/clamp, equal-weight == plain RRF,
+  up-weighting flips a fusion tie, zero weight disables without dropping the
+  chunk, env + file config resolution, the tuner never-worse-than-baseline +
+  persistence, unknown-metric guard, and the `--tune` CLI path (9).
+
+- **Result diversity via MMR fusion re-ranking (POCKET-501).** `pocket.retrieval`
+  can now re-rank the fused candidate pool with Maximal Marginal Relevance so
+  near-duplicate chunks (e.g. several from the same file) stop crowding the
+  top-k. Fusion was split into `_fuse_ranked` (full `(chunk_id, hit)` pool) and
+  `_fuse` (the existing top-k); when MMR is on, `search()` pulls each candidate's
+  stored float32 embedding (`_fetch_embeddings`) and picks greedily by
+  `λ·relevance − (1−λ)·max-cosine-to-selected` (`_mmr_rerank`/`_cosine`). Off by
+  default — the deterministic RRF order is unchanged unless opted in via
+  `POCKET_MMR`/`POCKET_MMR_LAMBDA` (env) or `pocket search --mmr/--no-mmr`
+  (per-query). Degrades safely: missing/zero embeddings count as non-redundant,
+  so the relevance order is preserved. Tests: cosine signal + degenerate inputs,
+  λ=1 reproduces relevance order, low λ promotes a diverse candidate over a
+  near-duplicate, limit/empty handling, the end-to-end MMR search path, and the
+  config-default routing (6).
+- **Agent-native `pocket search --json`.** The CLI now mirrors the REST
+  `/search` and MCP `search_knowledge` surfaces: with `--json` it emits
+  `{query, mode, count, hits[]}` (each hit carrying full
+  `file_path`/`text`/`start_offset`/`end_offset`/`score` lineage) as pure JSON on
+  stdout, while status and "run update first" diagnostics go to stderr, so a
+  calling agent or pipeline can parse `pocket search` output deterministically.
+  Tests: JSON payload shape + lineage keys on a real lexical hit, and the
+  empty-index path emitting `[]` on stdout with the hint on stderr (2).
+
+### Fixed
+- **Test runner was broken and bypassed the offline mock.** `run_tests.sh`
+  invoked `tests.test_retrieval_api.TestGraphExtraction` (the class actually
+  lives in `tests/test_graph_unit.py`), so the script errored partway through,
+  and it drove tests via `python -m unittest`, which does not load the
+  session-scoped `MockEmbedder` fixture in `tests/conftest.py` — silently loading
+  real model weights and skipping whole modules (`test_graph_unit`,
+  `test_multimodal`, `TestRetrievalEvaluation`). Rewrote it to drive pytest,
+  which auto-discovers every module, honors the offline mock, and runs all 91
+  tests in ~5 s. Updated the stale "81 tests" count in the README.
+
+### Docs
+- **Review & improvement backlog (spec-stack Write layer).** Added
+  `docs/planning/review-2026-improvements.md`: a grounded review of the current
+  codebase plus a prioritized, feature-oriented backlog (MMR fusion, weighted
+  RRF, query expansion, semantic routing, HITL in the Web UI, citation
+  synthesis) with concrete code seams for the next loop.
+- **Product strategy & discovery doc (PM frameworks).** Added
+  `docs/planning/pm-product-strategy-2026.md`: positioning, Jobs-to-be-Done,
+  personas, a North Star + input-metric set, a Teresa Torres Opportunity
+  Solution Tree mapping the engineering backlog to outcomes, a lightweight PRD
+  for cited-answer synthesis (POCKET-506), and pretotyping/riskiest-assumption
+  tests to validate before building. Also corrected a stale "89 tests" count in
+  the README roadmap (suite is now 91).
+
+
+### Added
 - **Automated retrieval evaluation & regression guard (POCKET-303).** New
 
   `pocket/evaluation.py` plus a `pocket eval` command turn retrieval quality into

@@ -25,6 +25,12 @@ class ComponentStats:
     num_deletes: int = 0
     num_reprocesses: int = 0
     num_errors: int = 0
+    # Physical target rows actually written vs. skipped because the desired row
+    # already matched what was stored (state-diff delta writes). These count
+    # individual rows, not source items, so they expose write amplification that
+    # the source-level counters above cannot.
+    num_row_writes: int = 0
+    num_row_skips: int = 0
 
     @property
     def num_processed(self) -> int:
@@ -45,12 +51,15 @@ class ComponentStats:
         self.num_deletes += other.num_deletes
         self.num_reprocesses += other.num_reprocesses
         self.num_errors += other.num_errors
+        self.num_row_writes += other.num_row_writes
+        self.num_row_skips += other.num_row_skips
 
     def __str__(self) -> str:
         return (
             f"adds={self.num_adds} reprocesses={self.num_reprocesses} "
             f"unchanged={self.num_unchanged} deletes={self.num_deletes} "
-            f"errors={self.num_errors} in_progress={self.num_in_progress}"
+            f"errors={self.num_errors} in_progress={self.num_in_progress} "
+            f"row_writes={self.num_row_writes} row_skips={self.num_row_skips}"
         )
 
 

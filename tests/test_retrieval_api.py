@@ -105,6 +105,63 @@ class TestRetrievalAndApi(unittest.TestCase):
         self.assertTrue(any("vectors.md" in h.file_path for h in hits))
         self.assertGreater(hits[0].score, 0.0)
 
+    def test_mmr_path_runs_and_draws_from_fused_pool(self):
+        """The MMR flag re-ranks without erroring and stays within the pool.
+
+        With the offline MockEmbedder every stored vector is all-zero, so the
+        diversity penalty (cosine) is 0 and MMR must reproduce the relevance
+        order — proving the flag is wired end to end and degrades safely when
+        embeddings carry no signal. (Algorithmic diversity behaviour is unit
+        tested in :class:`TestMmrRerank` with real vectors.)
+        """
+        from pocket import retrieval
+        importlib.reload(retrieval)
+        self._run()
+        base = retrieval.search(
+            "embeddings similarity", limit=3, mode="hybrid",
+            db_path=self.db_path, use_mmr=False,
+        )
+        mmr = retrieval.search(
+            "embeddings similarity", limit=3, mode="hybrid",
+            db_path=self.db_path, use_mmr=True, mmr_lambda=0.5,
+        )
+        self.assertTrue(mmr, "MMR path must return hits")
+        self.assertLessEqual(len(mmr), 3)
+        self.assertEqual(
+            [h.file_path for h in mmr],
+            [h.file_path for h in base][: len(mmr)],
+            "degenerate (zero) embeddings must preserve the relevance order",
+        )
+
+    def test_search_uses_config_mmr_default_when_unset(self):
+        """With use_mmr=None, search() follows config.POCKET_MMR / _LAMBDA."""
+        from pocket import retrieval
+        importlib.reload(retrieval)
+        self._run()
+        captured = {}
+        orig = retrieval._mmr_rerank
+        cfg = retrieval.config
+        saved = (cfg.POCKET_MMR, cfg.POCKET_MMR_LAMBDA)
+
+        def spy(candidates, mmr_lambda, limit):
+            captured["lambda"] = mmr_lambda
+            return orig(candidates, mmr_lambda, limit)
+
+        retrieval._mmr_rerank = spy
+        cfg.POCKET_MMR = True
+        cfg.POCKET_MMR_LAMBDA = 0.42
+        try:
+            retrieval.search(
+                "embeddings", limit=3, mode="lexical", db_path=self.db_path
+            )
+            self.assertIn(
+                "lambda", captured, "config default must route through MMR"
+            )
+            self.assertAlmostEqual(captured["lambda"], 0.42, places=6)
+        finally:
+            retrieval._mmr_rerank = orig
+            cfg.POCKET_MMR, cfg.POCKET_MMR_LAMBDA = saved
+
     def test_lineage_offsets_point_at_source(self):
         """After refinement, stored offsets still index into the raw source."""
         self._run()
@@ -230,6 +287,44 @@ class TestRetrievalAndApi(unittest.TestCase):
             self.assertFalse(s["available"])
             self.assertEqual(s["candidates"], 0)
 
+    def test_routing_trace_auto_mode_routes_by_query_shape(self):
+        """`mode="auto"` resolves to a concrete mode in the trace (POCKET-504).
+
+        A code-shaped query routes to lexical (only the lexical strategy is
+        active in the trace); a prose query stays on the hybrid blend (all three
+        active). The trace must mirror the real search routing decision.
+        """
+        from pocket import retrieval
+
+        importlib.reload(retrieval)
+        self._run()
+
+        code = retrieval.routing_trace("drop_source() handler", mode="auto")
+        self.assertEqual(code["mode"], "lexical", "code-shaped query routes to lexical")
+        code_by = {s["name"]: s for s in code["strategies"]}
+        self.assertTrue(code_by["lexical"]["active"])
+        self.assertFalse(code_by["vector"]["active"])
+        self.assertFalse(code_by["graph"]["active"])
+
+        prose = retrieval.routing_trace("deletion propagation", mode="auto")
+        self.assertEqual(prose["mode"], "hybrid", "prose query keeps the hybrid blend")
+        prose_by = {s["name"]: s for s in prose["strategies"]}
+        self.assertTrue(prose_by["vector"]["active"])
+        self.assertTrue(prose_by["lexical"]["active"])
+        self.assertTrue(prose_by["graph"]["active"])
+
+    def test_api_trace_accepts_auto_mode(self):
+        """The /trace endpoint accepts mode=auto and reports the routed mode."""
+        from starlette.testclient import TestClient
+        from pocket.api_server import create_app
+
+        self._run()
+        client = TestClient(create_app())
+        r = client.get("/trace", params={"q": "drop_source() call", "mode": "auto"})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.json()["mode"], "lexical")
+
+
     def test_api_ui_and_trace_endpoints(self):
         from starlette.testclient import TestClient
         from pocket.api_server import create_app
@@ -257,6 +352,158 @@ class TestRetrievalAndApi(unittest.TestCase):
 
         r = client.get("/trace", params={"q": "x", "mode": "bogus"})
         self.assertEqual(r.status_code, 400)
+
+    # ---- HITL pending review (POCKET-505) ---------------------------------
+    def _seed_pending(self):
+        """Create graph tables with one approved + one pending entity and a
+        pending relation joining them. Returns (pending_entity_id, relation_id).
+
+        ``pending_entity_id`` is deliberately > 2**53 so the JS-safe string
+        round-trip is exercised by the REST layer.
+        """
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        conn = sqlite3.connect(str(self.db_path))
+        big_id = 9007199254740993  # 2**53 + 1 -> not float64-representable
+        rel_id = -8765432109876543  # signed 64-bit, also outside JS safe range
+        try:
+            conn.execute(
+                "CREATE TABLE entities (id INTEGER PRIMARY KEY, name TEXT, "
+                "type TEXT, confidence REAL, source_file TEXT, status TEXT)"
+            )
+            conn.execute(
+                "CREATE TABLE relations (id INTEGER PRIMARY KEY, predicate TEXT, "
+                "subject_id INTEGER, object_id INTEGER, confidence REAL, "
+                "source_file TEXT, status TEXT)"
+            )
+            # FTS mirror so reject exercises its cleanup branch.
+            conn.execute(
+                "CREATE TABLE _pocket_fts_entities (row_id INTEGER, content TEXT)"
+            )
+            conn.executemany(
+                "INSERT INTO entities VALUES (?,?,?,?,?,?)",
+                [
+                    (111, "Embeddings", "concept", 0.95, "vectors.md", "approved"),
+                    (big_id, "Cosine", "concept", 0.40, "vectors.md", "pending"),
+                ],
+            )
+            conn.execute(
+                "INSERT INTO _pocket_fts_entities VALUES (?,?)", (big_id, "Cosine")
+            )
+            conn.execute(
+                "INSERT INTO relations VALUES (?,?,?,?,?,?,?)",
+                (rel_id, "relates_to", 111, big_id, 0.35, "vectors.md", "pending"),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        return big_id, rel_id
+
+    def _status_of(self, table, row_id):
+        conn = sqlite3.connect(str(self.db_path))
+        try:
+            row = conn.execute(
+                f"SELECT status FROM {table} WHERE id = ?", (row_id,)
+            ).fetchone()
+        finally:
+            conn.close()
+        return row[0] if row else None
+
+    def test_api_pending_lists_staged_facts_as_strings(self):
+        from starlette.testclient import TestClient
+        from pocket.api_server import create_app
+
+        big_id, rel_id = self._seed_pending()
+        client = TestClient(create_app())
+        r = client.get("/pending")
+        self.assertEqual(r.status_code, 200)
+        body = r.json()
+        # Only pending rows surface; the approved entity (111) is not listed.
+        self.assertEqual(len(body["entities"]), 1)
+        self.assertEqual(len(body["relations"]), 1)
+        ent = body["entities"][0]
+        self.assertEqual(ent["id"], str(big_id))   # JS-safe string, exact value
+        self.assertEqual(ent["name"], "Cosine")
+        rel = body["relations"][0]
+        self.assertEqual(rel["id"], str(rel_id))
+        # Relation resolves its endpoint names by joining the entities table.
+        self.assertEqual(rel["subject"], "Embeddings")
+        self.assertEqual(rel["object"], "Cosine")
+
+    def test_api_pending_id_survives_64bit_string_roundtrip(self):
+        from starlette.testclient import TestClient
+        from pocket.api_server import create_app
+
+        big_id, _ = self._seed_pending()
+        client = TestClient(create_app())
+        # Approve the >2**53 entity by the exact string id the listing returned.
+        r = client.post("/pending/approve", json={"ids": [str(big_id)]})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.json(), {"action": "approve", "entities": 1, "relations": 0})
+        # The exact row flipped; a float64-rounded neighbour would have missed it.
+        self.assertEqual(self._status_of("entities", big_id), "approved")
+
+    def test_api_pending_reject_deletes_rows_and_fts(self):
+        from starlette.testclient import TestClient
+        from pocket.api_server import create_app
+
+        big_id, rel_id = self._seed_pending()
+        client = TestClient(create_app())
+        # Reject all pending facts (omitting ids -> everything pending).
+        r = client.post("/pending/reject", json={})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.json(), {"action": "reject", "entities": 1, "relations": 1})
+        self.assertIsNone(self._status_of("entities", big_id))
+        self.assertIsNone(self._status_of("relations", rel_id))
+        # The FTS mirror row for the rejected entity is gone too.
+        conn = sqlite3.connect(str(self.db_path))
+        try:
+            left = conn.execute(
+                "SELECT COUNT(*) FROM _pocket_fts_entities WHERE row_id = ?",
+                (big_id,),
+            ).fetchone()[0]
+        finally:
+            conn.close()
+        self.assertEqual(left, 0)
+
+    def test_api_pending_review_validates_action_and_ids(self):
+        from starlette.testclient import TestClient
+        from pocket.api_server import create_app
+
+        self._seed_pending()
+        client = TestClient(create_app())
+        # Unknown action -> 404, nothing approved.
+        r = client.post("/pending/bogus", json={"ids": None})
+        self.assertEqual(r.status_code, 404)
+        # Non-integer ids -> 400.
+        r = client.post("/pending/approve", json={"ids": ["not-a-number"]})
+        self.assertEqual(r.status_code, 400)
+        # Non-list ids -> 400.
+        r = client.post("/pending/approve", json={"ids": 5})
+        self.assertEqual(r.status_code, 400)
+
+    def test_api_pending_requires_index(self):
+        from starlette.testclient import TestClient
+        from pocket.api_server import create_app
+
+        # No DB on disk yet.
+        client = TestClient(create_app())
+        self.assertEqual(client.get("/pending").status_code, 503)
+        self.assertEqual(
+            client.post("/pending/approve", json={}).status_code, 503
+        )
+
+    def test_pending_review_ui_section_present(self):
+        from starlette.testclient import TestClient
+        from pocket.api_server import create_app
+
+        client = TestClient(create_app())
+        html = client.get("/").text
+        self.assertIn("Pending review", html)
+        self.assertIn("loadPending", html)
+        self.assertIn("/pending/", html)
+        # The mode picker now also exposes the POCKET-504 auto router.
+        self.assertIn('value="auto"', html)
+
 
 
 class TestTextRefiner(unittest.TestCase):
@@ -580,6 +827,46 @@ class TestLifecycleCommands(unittest.TestCase):
         res = runner.invoke(cli, ["drop", "--yes"])
         self.assertEqual(res.exit_code, 0, res.output)
         self.assertIn("Dropped", res.output)
+
+    def test_search_json_emits_parseable_array(self):
+        import json as _json
+        import pocket.cli as cli_module
+        importlib.reload(cli_module)
+        from click.testing import CliRunner
+        cli = cli_module.cli
+        self._run()
+        runner = CliRunner()
+
+        res = runner.invoke(cli, ["search", "alpha", "--mode", "lexical", "--json"])
+        self.assertEqual(res.exit_code, 0, res.output)
+        # stdout must be pure JSON (no human "Searching for..." preamble).
+        payload = _json.loads(res.output)
+        self.assertEqual(payload["query"], "alpha")
+        self.assertEqual(payload["mode"], "lexical")
+        self.assertEqual(payload["count"], len(payload["hits"]))
+        self.assertTrue(payload["hits"], "lexical search for 'alpha' must hit")
+        first = payload["hits"][0]
+        # Each hit carries full lineage so an agent can cite source bytes.
+        for key in ("file_path", "text", "start_offset", "end_offset", "score"):
+            self.assertIn(key, first)
+        self.assertTrue(any(h["file_path"].endswith("alpha.md") for h in payload["hits"]))
+
+    def test_search_json_without_index_emits_empty_array(self):
+        import json as _json
+        import pocket.cli as cli_module
+        importlib.reload(cli_module)
+        from click.testing import CliRunner
+        cli = cli_module.cli
+        # No self._run(): the DB does not exist yet.
+        runner = CliRunner()
+        res = runner.invoke(cli, ["search", "anything", "--json"])
+        self.assertEqual(res.exit_code, 0, res.output)
+        # stdout carries a pure JSON empty array; the "run update first" hint
+        # is a diagnostic on stderr so it never pollutes a parsed payload.
+        self.assertEqual(_json.loads(res.stdout), [])
+        self.assertIn("Database does not exist", res.stderr)
+
+
 
 
 class TestGraphTarget(unittest.TestCase):
@@ -1343,6 +1630,320 @@ class TestRetrievalEvaluation(unittest.TestCase):
         )
         self.assertEqual(res.exit_code, 1, res.output)
         self.assertIn("REGRESSION", res.output)
+
+    def test_tune_weights_never_worse_than_baseline_and_persists(self):
+        from pocket import evaluation as ev
+
+        self._run()
+        cases = ev.synthesize_cases(db_path=self.db_path, mode="lexical")
+        self.assertTrue(cases)
+
+        result = ev.tune_weights(
+            cases, db_path=self.db_path, k=5, metric="mean_average_precision"
+        )
+        # Lexical-only cases vary only the lexical weight; vector/graph stay out.
+        self.assertEqual(result.tuned_strategies, ["lexical"])
+        # 1.0 is always probed, so the optimizer can never land below the
+        # equal-weight baseline.
+        self.assertGreaterEqual(result.best_score, result.baseline_score)
+        self.assertEqual(result.baseline_weights, {"vector": 1.0, "lexical": 1.0, "graph": 1.0})
+        # A positive lexical weight must survive (weight 0 would disable the only
+        # signal and tank the score), so the winner keeps lexical > 0.
+        self.assertGreater(result.best_weights["lexical"], 0.0)
+        # Every trial is recorded with the metric it scored.
+        self.assertTrue(result.trials)
+        self.assertTrue(all(t.weights["vector"] == 1.0 for t in result.trials))
+
+        # Persist + reload roundtrip (the POCKET_RRF_WEIGHTS_FILE contract).
+        wpath = pathlib.Path(self.temp_dir.name) / "weights.json"
+        ev.save_weights(wpath, result.best_weights)
+        self.assertEqual(ev.load_weights(wpath), result.best_weights)
+
+    def test_tune_weights_rejects_unknown_metric(self):
+        from pocket import evaluation as ev
+
+        self._run()
+        cases = ev.synthesize_cases(db_path=self.db_path, mode="lexical")
+        with self.assertRaises(ValueError):
+            ev.tune_weights(cases, db_path=self.db_path, metric="f1")
+
+    def test_tune_weights_rejects_unknown_method(self):
+        from pocket import evaluation as ev
+
+        self._run()
+        cases = ev.synthesize_cases(db_path=self.db_path, mode="lexical")
+        with self.assertRaises(ValueError):
+            ev.tune_weights(cases, db_path=self.db_path, method="annealing")
+
+    def test_tune_weights_coordinate_matches_grid_and_is_cheaper(self):
+        from pocket import evaluation as ev
+
+        self._run()
+        cases = ev.synthesize_cases(db_path=self.db_path, mode="lexical")
+        self.assertTrue(cases)
+        grid = ev.tune_weights(cases, db_path=self.db_path, k=5, method="grid")
+        coord = ev.tune_weights(
+            cases, db_path=self.db_path, k=5, method="coordinate"
+        )
+        # Same guarantee: never worse than the equal-weight baseline.
+        self.assertGreaterEqual(coord.best_score, coord.baseline_score)
+        # On a 1-D lexical search the two methods explore the same line, so the
+        # coordinate optimum equals the grid optimum.
+        self.assertEqual(coord.best_score, grid.best_score)
+        self.assertEqual(coord.best_weights["lexical"], grid.best_weights["lexical"])
+        # Coordinate ascent never scores more points than the exhaustive grid.
+        self.assertLessEqual(len(coord.trials), len(grid.trials))
+
+    def test_cli_eval_tune_saves_weights(self):
+        import json
+        import pocket.cli as cli_module
+        from click.testing import CliRunner
+
+        importlib.reload(cli_module)
+        self._run()
+        runner = CliRunner()
+        wpath = pathlib.Path(self.temp_dir.name) / "cli_weights.json"
+        res = runner.invoke(
+            cli_module.cli,
+            ["eval", "--mode", "lexical", "--tune", "--save-weights", str(wpath)],
+        )
+        self.assertEqual(res.exit_code, 0, res.output)
+        self.assertIn("Tuned RRF weights", res.output)
+        self.assertIn("baseline (equal weights)", res.output)
+        self.assertTrue(wpath.exists())
+        data = json.loads(wpath.read_text())
+        # Persisted weights name the three strategies and stay non-negative.
+        self.assertEqual(set(data), {"vector", "lexical", "graph"})
+        self.assertTrue(all(v >= 0.0 for v in data.values()))
+
+
+
+class TestMmrRerank(unittest.TestCase):
+    """Unit tests for the MMR diversity re-ranker (POCKET-501), with real
+    crafted vectors so the relevance/diversity trade-off is actually exercised
+    (the integration test can't, since MockEmbedder yields zero vectors)."""
+
+    @staticmethod
+    def _hit(path, score):
+        from pocket.retrieval import RetrievalHit
+        return RetrievalHit(path, path, 0, 1, score=score)
+
+    def test_cosine_handles_signal_and_degenerate_inputs(self):
+        import numpy as np
+        from pocket.retrieval import _cosine
+        a = np.array([1.0, 0.0], dtype=np.float32)
+        b = np.array([0.0, 1.0], dtype=np.float32)
+        self.assertAlmostEqual(_cosine(a, a), 1.0, places=5)
+        self.assertAlmostEqual(_cosine(a, b), 0.0, places=5)
+        # Missing or zero vectors are treated as non-redundant (0), not errors.
+        self.assertEqual(_cosine(a, None), 0.0)
+        self.assertEqual(_cosine(None, b), 0.0)
+        self.assertEqual(_cosine(a, np.zeros(2, dtype=np.float32)), 0.0)
+
+    def test_lambda_one_is_pure_relevance_order(self):
+        import numpy as np
+        from pocket.retrieval import _mmr_rerank
+        same = np.array([1.0, 0.0], dtype=np.float32)
+        diverse = np.array([0.0, 1.0], dtype=np.float32)
+        cands = [
+            (self._hit("A", 1.0), same),
+            (self._hit("B", 0.9), same),      # near-duplicate of A
+            (self._hit("C", 0.5), diverse),   # diverse but less relevant
+        ]
+        out = _mmr_rerank(cands, mmr_lambda=1.0, limit=2)
+        self.assertEqual([h.file_path for h in out], ["A", "B"])
+
+    def test_low_lambda_promotes_a_diverse_candidate(self):
+        import numpy as np
+        from pocket.retrieval import _mmr_rerank
+        same = np.array([1.0, 0.0], dtype=np.float32)
+        diverse = np.array([0.0, 1.0], dtype=np.float32)
+        cands = [
+            (self._hit("A", 1.0), same),
+            (self._hit("B", 0.9), same),      # redundant with A -> penalised
+            (self._hit("C", 0.5), diverse),   # rewarded for diversity
+        ]
+        # lambda=0.3: after A, C (orthogonal) beats the near-duplicate B.
+        out = _mmr_rerank(cands, mmr_lambda=0.3, limit=2)
+        self.assertEqual([h.file_path for h in out], ["A", "C"])
+
+    def test_respects_limit_and_empty_input(self):
+        import numpy as np
+        from pocket.retrieval import _mmr_rerank
+        v = np.array([1.0, 0.0], dtype=np.float32)
+        cands = [(self._hit(p, s), v) for p, s in [("A", 1.0), ("B", 0.9), ("C", 0.8)]]
+        self.assertEqual(len(_mmr_rerank(cands, mmr_lambda=0.5, limit=2)), 2)
+        self.assertEqual(_mmr_rerank([], mmr_lambda=0.5, limit=5), [])
+
+class TestWeightedFusion(unittest.TestCase):
+    """Unit tests for weighted Reciprocal Rank Fusion (POCKET-502).
+
+    Exercised as pure functions over crafted rows so the weighting effect is
+    deterministic and independent of the embedding model.
+    """
+
+    @staticmethod
+    def _row(chunk_id, path, rank_hint=0):
+        # Row shape the strategies emit: (chunk_id, file, text, start, end, _score).
+        return (chunk_id, path, "text", 0, 1, 0.0)
+
+    def test_resolve_weights_defaults_merge_and_clamp(self):
+        from pocket.retrieval import _resolve_weights
+
+        # None -> the configured defaults (1.0 each out of the box).
+        self.assertEqual(
+            _resolve_weights(None), {"vector": 1.0, "lexical": 1.0, "graph": 1.0}
+        )
+        # Partial override leaves the untouched strategies at their default.
+        merged = _resolve_weights({"vector": 3.0})
+        self.assertEqual(merged, {"vector": 3.0, "lexical": 1.0, "graph": 1.0})
+        # Negative weights clamp to 0 (a strategy can be disabled, never inverted).
+        self.assertEqual(_resolve_weights({"lexical": -5.0})["lexical"], 0.0)
+
+    def test_equal_weights_reproduce_plain_rrf(self):
+        from pocket.retrieval import _fuse, RRF_K
+
+        vec = [self._row(1, "v.md")]
+        lex = [self._row(2, "l.md")]
+        hits = _fuse(vec, lex, limit=5)
+        # Both ranked #1 in their own list -> identical contribution -> tie,
+        # broken by fold order (vector first). Scores are exactly 1/(RRF_K+1).
+        self.assertEqual([h.file_path for h in hits], ["v.md", "l.md"])
+        for h in hits:
+            self.assertAlmostEqual(h.score, 1.0 / (RRF_K + 1), places=9)
+
+    def test_weight_promotes_the_favored_strategy(self):
+        from pocket.retrieval import _fuse
+
+        vec = [self._row(1, "v.md")]
+        lex = [self._row(2, "l.md")]
+        # Up-weighting lexical flips the tie: the lexical-only chunk now leads.
+        hits = _fuse(vec, lex, limit=5, weights={"lexical": 2.0})
+        self.assertEqual([h.file_path for h in hits], ["l.md", "v.md"])
+        self.assertGreater(hits[0].score, hits[1].score)
+
+    def test_zero_weight_disables_a_strategy_without_dropping_the_chunk(self):
+        from pocket.retrieval import _fuse
+
+        vec = [self._row(1, "v.md")]
+        lex = [self._row(2, "l.md")]
+        hits = _fuse(vec, lex, limit=5, weights={"vector": 0.0})
+        # The vector chunk contributes nothing, so the lexical chunk leads, but
+        # the zero-weighted chunk is still present (ranked last at score 0).
+        self.assertEqual([h.file_path for h in hits], ["l.md", "v.md"])
+        self.assertEqual(hits[-1].score, 0.0)
+
+
+class TestWeightedRrfConfig(unittest.TestCase):
+    """POCKET-502: config resolution of tuned weights from env / file."""
+
+    def test_env_weight_overrides_are_clamped(self):
+        import pocket.config as cfg
+
+        env = {
+            "POCKET_RRF_VECTOR_WEIGHT": "2.5",
+            "POCKET_RRF_LEXICAL_WEIGHT": "-3",  # clamps to 0
+            "POCKET_RRF_GRAPH_WEIGHT": "notnum",  # bad -> falls back to 1.0
+        }
+        saved = {k: os.environ.get(k) for k in env}
+        os.environ.update(env)
+        try:
+            weights = cfg._resolved_rrf_weights()
+        finally:
+            for k, v in saved.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+        self.assertEqual(weights, {"vector": 2.5, "lexical": 0.0, "graph": 1.0})
+
+    def test_weights_file_overrides_env_defaults(self):
+        import json
+
+        import pocket.config as cfg
+
+        wfile = pathlib.Path(self.tmp.name) / "tuned.json"
+        wfile.write_text(json.dumps({"vector": 1.5, "lexical": 2.0}))
+        saved = os.environ.get("POCKET_RRF_WEIGHTS_FILE")
+        os.environ["POCKET_RRF_WEIGHTS_FILE"] = str(wfile)
+        try:
+            weights = cfg._resolved_rrf_weights()
+        finally:
+            if saved is None:
+                os.environ.pop("POCKET_RRF_WEIGHTS_FILE", None)
+            else:
+                os.environ["POCKET_RRF_WEIGHTS_FILE"] = saved
+        # File keys override; graph (absent from the file) keeps the 1.0 default.
+        self.assertEqual(weights, {"vector": 1.5, "lexical": 2.0, "graph": 1.0})
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+
+class TestQueryExpansion(unittest.TestCase):
+    """POCKET-503: deterministic synonym/acronym query expansion."""
+
+    def test_expand_appends_acronym_long_form_in_order(self):
+        from pocket import retrieval
+
+        syn = {"wal": ["write ahead log"]}
+        out = retrieval._expand_query("wal crash", syn)
+        # Original tokens are kept and the long form is appended (recall only).
+        self.assertEqual(out, "wal crash write ahead log")
+
+    def test_expand_dedupes_words_already_in_query(self):
+        from pocket import retrieval
+
+        syn = {"wal": ["write ahead log"]}
+        out = retrieval._expand_query("write wal", syn)
+        # 'write' is already present, so only the missing words are appended.
+        self.assertEqual(out.split(), ["write", "wal", "ahead", "log"])
+
+    def test_expand_is_noop_without_match_or_map(self):
+        from pocket import retrieval
+
+        syn = {"wal": ["write ahead log"]}
+        self.assertEqual(retrieval._expand_query("plain query", syn), "plain query")
+        self.assertEqual(retrieval._expand_query("wal", {}), "wal")
+
+    def test_expand_is_case_insensitive_and_multi_phrase(self):
+        from pocket import retrieval
+
+        syn = {"auth": ["authentication", "authorization"]}
+        out = retrieval._expand_query("AUTH flow", syn)
+        self.assertEqual(out, "AUTH flow authentication authorization")
+
+    def test_expansion_file_overrides_builtin_map(self):
+        import json
+
+        import pocket.config as cfg
+
+        f = pathlib.Path(self.tmp.name) / "syn.json"
+        f.write_text(json.dumps({"wal": "write ahead log custom", "xyz": ["foo bar"]}))
+        saved = os.environ.get("POCKET_QUERY_EXPANSION_FILE")
+        os.environ["POCKET_QUERY_EXPANSION_FILE"] = str(f)
+        try:
+            m = cfg._load_query_expansions()
+        finally:
+            if saved is None:
+                os.environ.pop("POCKET_QUERY_EXPANSION_FILE", None)
+            else:
+                os.environ["POCKET_QUERY_EXPANSION_FILE"] = saved
+        # A string override is normalised to a one-element list and replaces the
+        # built-in; a brand-new token is added; untouched built-ins survive.
+        self.assertEqual(m["wal"], ["write ahead log custom"])
+        self.assertEqual(m["xyz"], ["foo bar"])
+        self.assertIn("lru", m)
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
 
 
 if __name__ == "__main__":

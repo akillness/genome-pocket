@@ -163,6 +163,11 @@ async def mount_each(func: Callable, items: Any, *args, stats: "UpdateStats" = N
         stats = _ACTIVE_STATS.get() or UpdateStats()
     component = stats.component(getattr(func, "__name__", "component"))
 
+    # Snapshot the target's lifetime row tallies so we can attribute just this
+    # component's physical writes vs. state-diff skips to its stats.
+    rows_written_before = getattr(target, "num_row_writes", 0) if target is not None else 0
+    rows_skipped_before = getattr(target, "num_row_skips", 0) if target is not None else 0
+
     for key, value in iterable:
         source_key = str(key)
         seen_keys.add(source_key)
@@ -207,6 +212,8 @@ async def mount_each(func: Callable, items: Any, *args, stats: "UpdateStats" = N
     if target is not None:
         removed = target.sweep(seen_keys)
         component.num_deletes += int(removed or 0)
+        component.num_row_writes += target.num_row_writes - rows_written_before
+        component.num_row_skips += target.num_row_skips - rows_skipped_before
 
     return stats
 

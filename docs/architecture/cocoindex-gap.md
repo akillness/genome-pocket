@@ -24,7 +24,7 @@ correctness bugs and block several planned features.
 | # | Missing capability | pocketindex behaviour | cocoindex 1.0.11 | Affected files |
 |---|--------------------|-----------------------|------------------|----------------|
 | C1 | **Content fingerprinting** | Always full-reprocess every file on every run | `connectorkits.fingerprint.fingerprint_bytes/str/object` | `pocketindex/__init__.py` `mount_each`, `pocketindex/connectors/localfs.py` |
-| C2 | **State-diff / delta writes** | Re-inserts all rows; orphaned chunks accumulate | `connectorkits.statediff.DiffAction`, `TrackingRecordTransition` | `pocketindex/connectors/sqlite.py` `TableTarget` |
+| C2 | **State-diff / delta writes** | ✅ Done — `end_source`/`sweep` delete orphaned chunks, and `declare_row` now uses `connectorkits.statediff.diff` for a per-row `insert`/`replace`/skip decision so unchanged rows are not rewritten | `connectorkits.statediff.DiffAction`, `TrackingRecordTransition` | `pocketindex/connectors/sqlite.py` `TableTarget` |
 | C3 | **`map()` concurrency** | Sequential `for` loop | `cocoindex.map()` fans out as concurrent async tasks | `pocketindex/__init__.py` `map()` |
 | C4 | **`fn(memo=True)` scope** | Per-run in-memory dict; cleared on restart | LMDB-backed persistent memo, keyed by logic fingerprint | `pocketindex/__init__.py` `fn` decorator |
 | C5 | **`full_reprocess` flag** | Not implemented | `App.update_blocking(full_reprocess=True)` | `pocketindex/__init__.py` `App.update_blocking` |
@@ -92,7 +92,7 @@ correctness bugs and block several planned features.
 ```
 P0  T1-T3   MockEmbedder — unblocks all other work
 P1  C1      Fingerprinting — biggest correctness win; large repos re-index fully every run
-P2  C2      State-diff delta writes — prevents chunk accumulation on edits
+P2  C2      State-diff delta writes — DONE (orphan sweep + per-row statediff skip)
 P3  W1      list_concepts MCP — user-visible, ~30 min to implement
 P4  C3      map() concurrency — throughput improvement for multi-file batches
 P5  W2      Live mode push — polling is functionally correct, lower priority

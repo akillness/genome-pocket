@@ -23,50 +23,9 @@ Pocket operates on the core mental model of **Target = F(Source)**. All data pro
 
 ### Data flow at a glance
 
-The same flow renders inline on GitHub below — each node maps to a concrete module/op in the codebase:
-
-```mermaid
-flowchart LR
-    subgraph SRC["1 · Source (LocalFS)"]
-        MD["notes/*.md, *.txt"]
-        CODE[".py .rs .ts .js .go .java …"]
-        WATCH["File Watcher<br/>live · Δ-only"]
-    end
-    subgraph REF["2 · Refine (TextRefiner)"]
-        NORM["normalize<br/>NFC · CRLF→LF · whitespace"]
-        OFF["offset map<br/>lineage → original bytes"]
-    end
-    subgraph XF["3 · Transform (PocketIndex ETL)"]
-        SPLIT["RecursiveSplitter<br/>code-aware"]
-        SEMSPLIT["SemanticSplitter ⚡<br/>embedding-guided (opt-in)"]
-        EMB["SentenceTransformer<br/>Qwen3-Embedding-0.6B (default)"]
-        IDG["IdGenerator<br/>deterministic · memo"]
-    end
-    subgraph LOAD["4 · Load (SQLite)"]
-        VEC["sqlite-vec<br/>vector · cosine"]
-        FTS["FTS5<br/>lexical · BM25"]
-        LIN["lineage · memo"]
-    end
-    subgraph SERVE["5 · Serve (retrieval.py)"]
-        HYDE["HyDE expansion ⚡<br/>hypothetical doc embed (opt-in)"]
-        RRF["Hybrid retrieval<br/>Reciprocal Rank Fusion"]
-        RERANK["Cross-encoder Reranker ⚡<br/>ms-marco-MiniLM (opt-in)"]
-        CLI["CLI"]
-        MCP["MCP"]
-        API["REST + Web UI"]
-    end
-    GRAPH["Knowledge Graph (optional)<br/>entities + relations · GraphRAG"]
-    EVAL["pocket eval<br/>Hit@k · MRR · MAP · LLM Judge ⚡"]
-
-    SRC --> REF --> XF --> LOAD --> SERVE
-    SPLIT -. "POCKET_SEMANTIC_SPLIT" .-> SEMSPLIT
-    HYDE -. "expand" .-> RRF
-    RRF --> RERANK --> CLI & MCP & API
-    XF -. "--graph" .-> GRAPH
-    GRAPH -. extract .-> LOAD
-    GRAPH -. augment .-> RRF
-    SERVE -. scores .-> EVAL
-```
+<p align="center">
+  <img src="docs/images/pipeline-flow.svg" alt="genome-pocket pipeline flow: Source → Refine → Transform → Load → Serve, with SemanticSplitter ⚡, HyDE ⚡, Cross-encoder Reranker ⚡, LLM Judge ⚡, Schema JSON ⚡" width="100%" />
+</p>
 
 
 ### Core Workflow — Source → Refine → Load → Serve
@@ -176,6 +135,16 @@ POCKET_RRF_VECTOR_WEIGHT=1.0
 POCKET_RRF_LEXICAL_WEIGHT=1.0
 POCKET_RRF_GRAPH_WEIGHT=1.0
 # POCKET_RRF_WEIGHTS_FILE=tuned.json
+
+# --- Optional: query expansion (POCKET-503) ---
+# Off by default (deterministic, no-op). When on, the query is augmented with
+# synonym/acronym expansion terms before fusion, so an abbreviation ("wal") can
+# still match a document that only spells out the long form ("write ahead log").
+# Offline — no daemon needed. Override per-query with `pocket search ... --expand`
+# / `pocket eval --expand`. POCKET_QUERY_EXPANSION_FILE points at a JSON object
+# mapping a token to a phrase or list of phrases, merged over the built-in map.
+POCKET_QUERY_EXPANSION=0
+# POCKET_QUERY_EXPANSION_FILE=synonyms.json
 # POCKET_RRF_WEIGHTS_FILE=tuned.json
 
 # --- Optional: 2026 SOTA improvements ---
@@ -252,6 +221,7 @@ pocket search "embeddings" --mmr              # re-rank for diversity (MMR); --n
 pocket search "embeddings" --rerank           # cross-encoder precision pass after RRF (POCKET-601)
 pocket search "embeddings" --hyde             # HyDE query expansion via Ollama (POCKET-602)
 pocket search "embeddings" --rerank --hyde    # stack both for maximum recall+precision
+pocket search "wal durability" --expand       # deterministic synonym/acronym expansion (POCKET-503; offline)
 ```
 
 The `--json` flag emits `{query, mode, count, hits[]}` (each hit with full
@@ -298,15 +268,20 @@ pocket eval --mode hybrid --k 5 --show-cases   # exercise the semantic path, pri
 pocket eval --cases gold.json                  # hand-written {query, relevant_files[, mode]} set
 pocket eval --save baseline.json               # record this run as a regression baseline
 pocket eval --baseline baseline.json --tolerance 0.01   # fail CI if any metric dropped
-pocket eval --tune --save-weights tuned.json   # grid-search RRF weights; save the winner
+pocket eval --tune --save-weights tuned.json   # search RRF weights; save the winner
+pocket eval --tune --tune-method coordinate    # cheaper coordinate-ascent search
 pocket eval --with-judge                       # add LLM-as-judge Faithfulness + Relevance scores (POCKET-604)
 pocket eval --with-judge --judge-model qwen3:8b  # use a specific Ollama model as judge
+pocket eval --cases gold.json --expand         # measure the query-expansion recall lift (POCKET-503)
 ```
 
-With `--tune` the harness becomes an **optimizer** (POCKET-502): it grid-searches
+With `--tune` the harness becomes an **optimizer** (POCKET-502): it searches
 the per-strategy fusion weights against the same cases, reports the best vs the
 equal-weight baseline (it can never do worse — `1.0` is always probed), and with
-`--save-weights` persists the winner. Point `POCKET_RRF_WEIGHTS_FILE` at that file
+`--save-weights` persists the winner. `--tune-method` picks the search: the
+exhaustive `grid` (default) or a cheaper `coordinate` ascent that optimises one
+strategy at a time and reaches the same optimum with fewer evaluations on the
+3-strategy hybrid surface. Point `POCKET_RRF_WEIGHTS_FILE` at the saved file
 to apply the tuned weights to every `pocket search` and `pocket eval` run.
 
 
@@ -434,7 +409,8 @@ Genome-pocket is evolving toward full adoption of the `cocoindex` runtime. The p
 
 | Phase | What | Status |
 |-------|------|--------|
-| P0 | **Test infra** — `MockEmbedder` session patch; the whole suite (now 113 tests) runs offline in < 10 s via `bash run_tests.sh` | ✅ done |
+| P0 | **Test infra** — `MockEmbedder` session patch; the whole suite (now 146 tests) runs offline in < 10 s via `bash run_tests.sh` | ✅ done |
+
 | P1 | **Content fingerprinting** — `cocoindex.connectorkits.fingerprint` replaces SHA-256 in `_compute_memo_hash`; unchanged files skip re-index | ✅ done |
 | P2 | **Concurrent `map()`** — `asyncio.gather` replaces sequential loop; matches real cocoindex contract | ✅ done |
 | P3 | **`list_concepts` MCP** — live graph query via `retrieval.list_graph_concepts()`; `POCKET_GRAPH=1` guard | ✅ done |

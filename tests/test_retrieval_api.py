@@ -287,6 +287,44 @@ class TestRetrievalAndApi(unittest.TestCase):
             self.assertFalse(s["available"])
             self.assertEqual(s["candidates"], 0)
 
+    def test_routing_trace_auto_mode_routes_by_query_shape(self):
+        """`mode="auto"` resolves to a concrete mode in the trace (POCKET-504).
+
+        A code-shaped query routes to lexical (only the lexical strategy is
+        active in the trace); a prose query stays on the hybrid blend (all three
+        active). The trace must mirror the real search routing decision.
+        """
+        from pocket import retrieval
+
+        importlib.reload(retrieval)
+        self._run()
+
+        code = retrieval.routing_trace("drop_source() handler", mode="auto")
+        self.assertEqual(code["mode"], "lexical", "code-shaped query routes to lexical")
+        code_by = {s["name"]: s for s in code["strategies"]}
+        self.assertTrue(code_by["lexical"]["active"])
+        self.assertFalse(code_by["vector"]["active"])
+        self.assertFalse(code_by["graph"]["active"])
+
+        prose = retrieval.routing_trace("deletion propagation", mode="auto")
+        self.assertEqual(prose["mode"], "hybrid", "prose query keeps the hybrid blend")
+        prose_by = {s["name"]: s for s in prose["strategies"]}
+        self.assertTrue(prose_by["vector"]["active"])
+        self.assertTrue(prose_by["lexical"]["active"])
+        self.assertTrue(prose_by["graph"]["active"])
+
+    def test_api_trace_accepts_auto_mode(self):
+        """The /trace endpoint accepts mode=auto and reports the routed mode."""
+        from starlette.testclient import TestClient
+        from pocket.api_server import create_app
+
+        self._run()
+        client = TestClient(create_app())
+        r = client.get("/trace", params={"q": "drop_source() call", "mode": "auto"})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.json()["mode"], "lexical")
+
+
     def test_api_ui_and_trace_endpoints(self):
         from starlette.testclient import TestClient
         from pocket.api_server import create_app
@@ -314,6 +352,158 @@ class TestRetrievalAndApi(unittest.TestCase):
 
         r = client.get("/trace", params={"q": "x", "mode": "bogus"})
         self.assertEqual(r.status_code, 400)
+
+    # ---- HITL pending review (POCKET-505) ---------------------------------
+    def _seed_pending(self):
+        """Create graph tables with one approved + one pending entity and a
+        pending relation joining them. Returns (pending_entity_id, relation_id).
+
+        ``pending_entity_id`` is deliberately > 2**53 so the JS-safe string
+        round-trip is exercised by the REST layer.
+        """
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        conn = sqlite3.connect(str(self.db_path))
+        big_id = 9007199254740993  # 2**53 + 1 -> not float64-representable
+        rel_id = -8765432109876543  # signed 64-bit, also outside JS safe range
+        try:
+            conn.execute(
+                "CREATE TABLE entities (id INTEGER PRIMARY KEY, name TEXT, "
+                "type TEXT, confidence REAL, source_file TEXT, status TEXT)"
+            )
+            conn.execute(
+                "CREATE TABLE relations (id INTEGER PRIMARY KEY, predicate TEXT, "
+                "subject_id INTEGER, object_id INTEGER, confidence REAL, "
+                "source_file TEXT, status TEXT)"
+            )
+            # FTS mirror so reject exercises its cleanup branch.
+            conn.execute(
+                "CREATE TABLE _pocket_fts_entities (row_id INTEGER, content TEXT)"
+            )
+            conn.executemany(
+                "INSERT INTO entities VALUES (?,?,?,?,?,?)",
+                [
+                    (111, "Embeddings", "concept", 0.95, "vectors.md", "approved"),
+                    (big_id, "Cosine", "concept", 0.40, "vectors.md", "pending"),
+                ],
+            )
+            conn.execute(
+                "INSERT INTO _pocket_fts_entities VALUES (?,?)", (big_id, "Cosine")
+            )
+            conn.execute(
+                "INSERT INTO relations VALUES (?,?,?,?,?,?,?)",
+                (rel_id, "relates_to", 111, big_id, 0.35, "vectors.md", "pending"),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        return big_id, rel_id
+
+    def _status_of(self, table, row_id):
+        conn = sqlite3.connect(str(self.db_path))
+        try:
+            row = conn.execute(
+                f"SELECT status FROM {table} WHERE id = ?", (row_id,)
+            ).fetchone()
+        finally:
+            conn.close()
+        return row[0] if row else None
+
+    def test_api_pending_lists_staged_facts_as_strings(self):
+        from starlette.testclient import TestClient
+        from pocket.api_server import create_app
+
+        big_id, rel_id = self._seed_pending()
+        client = TestClient(create_app())
+        r = client.get("/pending")
+        self.assertEqual(r.status_code, 200)
+        body = r.json()
+        # Only pending rows surface; the approved entity (111) is not listed.
+        self.assertEqual(len(body["entities"]), 1)
+        self.assertEqual(len(body["relations"]), 1)
+        ent = body["entities"][0]
+        self.assertEqual(ent["id"], str(big_id))   # JS-safe string, exact value
+        self.assertEqual(ent["name"], "Cosine")
+        rel = body["relations"][0]
+        self.assertEqual(rel["id"], str(rel_id))
+        # Relation resolves its endpoint names by joining the entities table.
+        self.assertEqual(rel["subject"], "Embeddings")
+        self.assertEqual(rel["object"], "Cosine")
+
+    def test_api_pending_id_survives_64bit_string_roundtrip(self):
+        from starlette.testclient import TestClient
+        from pocket.api_server import create_app
+
+        big_id, _ = self._seed_pending()
+        client = TestClient(create_app())
+        # Approve the >2**53 entity by the exact string id the listing returned.
+        r = client.post("/pending/approve", json={"ids": [str(big_id)]})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.json(), {"action": "approve", "entities": 1, "relations": 0})
+        # The exact row flipped; a float64-rounded neighbour would have missed it.
+        self.assertEqual(self._status_of("entities", big_id), "approved")
+
+    def test_api_pending_reject_deletes_rows_and_fts(self):
+        from starlette.testclient import TestClient
+        from pocket.api_server import create_app
+
+        big_id, rel_id = self._seed_pending()
+        client = TestClient(create_app())
+        # Reject all pending facts (omitting ids -> everything pending).
+        r = client.post("/pending/reject", json={})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.json(), {"action": "reject", "entities": 1, "relations": 1})
+        self.assertIsNone(self._status_of("entities", big_id))
+        self.assertIsNone(self._status_of("relations", rel_id))
+        # The FTS mirror row for the rejected entity is gone too.
+        conn = sqlite3.connect(str(self.db_path))
+        try:
+            left = conn.execute(
+                "SELECT COUNT(*) FROM _pocket_fts_entities WHERE row_id = ?",
+                (big_id,),
+            ).fetchone()[0]
+        finally:
+            conn.close()
+        self.assertEqual(left, 0)
+
+    def test_api_pending_review_validates_action_and_ids(self):
+        from starlette.testclient import TestClient
+        from pocket.api_server import create_app
+
+        self._seed_pending()
+        client = TestClient(create_app())
+        # Unknown action -> 404, nothing approved.
+        r = client.post("/pending/bogus", json={"ids": None})
+        self.assertEqual(r.status_code, 404)
+        # Non-integer ids -> 400.
+        r = client.post("/pending/approve", json={"ids": ["not-a-number"]})
+        self.assertEqual(r.status_code, 400)
+        # Non-list ids -> 400.
+        r = client.post("/pending/approve", json={"ids": 5})
+        self.assertEqual(r.status_code, 400)
+
+    def test_api_pending_requires_index(self):
+        from starlette.testclient import TestClient
+        from pocket.api_server import create_app
+
+        # No DB on disk yet.
+        client = TestClient(create_app())
+        self.assertEqual(client.get("/pending").status_code, 503)
+        self.assertEqual(
+            client.post("/pending/approve", json={}).status_code, 503
+        )
+
+    def test_pending_review_ui_section_present(self):
+        from starlette.testclient import TestClient
+        from pocket.api_server import create_app
+
+        client = TestClient(create_app())
+        html = client.get("/").text
+        self.assertIn("Pending review", html)
+        self.assertIn("loadPending", html)
+        self.assertIn("/pending/", html)
+        # The mode picker now also exposes the POCKET-504 auto router.
+        self.assertIn('value="auto"', html)
+
 
 
 class TestTextRefiner(unittest.TestCase):
@@ -1477,6 +1667,33 @@ class TestRetrievalEvaluation(unittest.TestCase):
         with self.assertRaises(ValueError):
             ev.tune_weights(cases, db_path=self.db_path, metric="f1")
 
+    def test_tune_weights_rejects_unknown_method(self):
+        from pocket import evaluation as ev
+
+        self._run()
+        cases = ev.synthesize_cases(db_path=self.db_path, mode="lexical")
+        with self.assertRaises(ValueError):
+            ev.tune_weights(cases, db_path=self.db_path, method="annealing")
+
+    def test_tune_weights_coordinate_matches_grid_and_is_cheaper(self):
+        from pocket import evaluation as ev
+
+        self._run()
+        cases = ev.synthesize_cases(db_path=self.db_path, mode="lexical")
+        self.assertTrue(cases)
+        grid = ev.tune_weights(cases, db_path=self.db_path, k=5, method="grid")
+        coord = ev.tune_weights(
+            cases, db_path=self.db_path, k=5, method="coordinate"
+        )
+        # Same guarantee: never worse than the equal-weight baseline.
+        self.assertGreaterEqual(coord.best_score, coord.baseline_score)
+        # On a 1-D lexical search the two methods explore the same line, so the
+        # coordinate optimum equals the grid optimum.
+        self.assertEqual(coord.best_score, grid.best_score)
+        self.assertEqual(coord.best_weights["lexical"], grid.best_weights["lexical"])
+        # Coordinate ascent never scores more points than the exhaustive grid.
+        self.assertLessEqual(len(coord.trials), len(grid.trials))
+
     def test_cli_eval_tune_saves_weights(self):
         import json
         import pocket.cli as cli_module
@@ -1664,6 +1881,69 @@ class TestWeightedRrfConfig(unittest.TestCase):
 
     def tearDown(self):
         self.tmp.cleanup()
+
+
+class TestQueryExpansion(unittest.TestCase):
+    """POCKET-503: deterministic synonym/acronym query expansion."""
+
+    def test_expand_appends_acronym_long_form_in_order(self):
+        from pocket import retrieval
+
+        syn = {"wal": ["write ahead log"]}
+        out = retrieval._expand_query("wal crash", syn)
+        # Original tokens are kept and the long form is appended (recall only).
+        self.assertEqual(out, "wal crash write ahead log")
+
+    def test_expand_dedupes_words_already_in_query(self):
+        from pocket import retrieval
+
+        syn = {"wal": ["write ahead log"]}
+        out = retrieval._expand_query("write wal", syn)
+        # 'write' is already present, so only the missing words are appended.
+        self.assertEqual(out.split(), ["write", "wal", "ahead", "log"])
+
+    def test_expand_is_noop_without_match_or_map(self):
+        from pocket import retrieval
+
+        syn = {"wal": ["write ahead log"]}
+        self.assertEqual(retrieval._expand_query("plain query", syn), "plain query")
+        self.assertEqual(retrieval._expand_query("wal", {}), "wal")
+
+    def test_expand_is_case_insensitive_and_multi_phrase(self):
+        from pocket import retrieval
+
+        syn = {"auth": ["authentication", "authorization"]}
+        out = retrieval._expand_query("AUTH flow", syn)
+        self.assertEqual(out, "AUTH flow authentication authorization")
+
+    def test_expansion_file_overrides_builtin_map(self):
+        import json
+
+        import pocket.config as cfg
+
+        f = pathlib.Path(self.tmp.name) / "syn.json"
+        f.write_text(json.dumps({"wal": "write ahead log custom", "xyz": ["foo bar"]}))
+        saved = os.environ.get("POCKET_QUERY_EXPANSION_FILE")
+        os.environ["POCKET_QUERY_EXPANSION_FILE"] = str(f)
+        try:
+            m = cfg._load_query_expansions()
+        finally:
+            if saved is None:
+                os.environ.pop("POCKET_QUERY_EXPANSION_FILE", None)
+            else:
+                os.environ["POCKET_QUERY_EXPANSION_FILE"] = saved
+        # A string override is normalised to a one-element list and replaces the
+        # built-in; a brand-new token is added; untouched built-ins survive.
+        self.assertEqual(m["wal"], ["write ahead log custom"])
+        self.assertEqual(m["xyz"], ["foo bar"])
+        self.assertIn("lru", m)
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
 
 
 if __name__ == "__main__":

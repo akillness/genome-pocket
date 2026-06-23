@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>genome-pocket — Architecture Diagrams</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #fff;
+    --fg: #111;
+    --muted: #555;
+    --border: #e0e0e0;
+    --overlay: rgba(0,0,0,0.82);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#111; --fg:#f0f0f0; --muted:#999; --border:#333; }
+  }
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg); color: var(--fg);
+    font: 15px/1.6 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+    padding: 2rem 1rem 4rem;
+    max-width: 960px; margin: 0 auto;
+  }
+  header { margin-bottom: 2.5rem; }
+  header h1 { font-size: 1.7rem; margin-bottom: 0.25rem; }
+  header p  { color: var(--muted); font-size: 0.95rem; }
+
+  section { margin-bottom: 3rem; }
+  section h2 { font-size: 1.15rem; margin-bottom: 0.5rem; }
+  section p.caption {
+    font-size: 0.85rem; color: var(--muted);
+    margin-top: 0.6rem; text-align: center;
+  }
+
+  /* ── image card ── */
+  .img-wrap {
+    border: 1px solid var(--border); border-radius: 10px;
+    overflow: hidden; cursor: zoom-in;
+    transition: box-shadow 0.18s;
+    display: block; /* makes <a> block */
+  }
+  .img-wrap:hover { box-shadow: 0 4px 20px rgba(0,0,0,0.18); }
+  .img-wrap img {
+    display: block;
+    width: 100%;   /* fill card */
+    max-width: 100%;
+    height: auto;
+  }
+
+  /* ── lightbox overlay ── */
+  #lb {
+    display: none;
+    position: fixed; inset: 0; z-index: 9999;
+    background: var(--overlay);
+    align-items: center; justify-content: center;
+    padding: 1.5rem;
+    cursor: zoom-out;
+  }
+  #lb.open { display: flex; }
+  #lb img {
+    max-width: min(90vw, 1200px);
+    max-height: 90vh;
+    width: auto; height: auto;
+    border-radius: 8px;
+    box-shadow: 0 8px 40px rgba(0,0,0,0.5);
+    cursor: default;
+  }
+  #lb-close {
+    position: fixed; top: 1rem; right: 1.2rem;
+    font-size: 2rem; line-height: 1; color: #fff;
+    cursor: pointer; background: none; border: 0;
+    opacity: 0.75; transition: opacity 0.15s;
+  }
+  #lb-close:hover { opacity: 1; }
+
+  footer {
+    margin-top: 3rem; padding-top: 1rem;
+    border-top: 1px solid var(--border);
+    font-size: 0.82rem; color: var(--muted); text-align: center;
+  }
+  footer a { color: inherit; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>🧬 genome-pocket — Architecture Diagrams</h1>
+  <p>Click any diagram to zoom in. Press <kbd>Esc</kbd> or click outside to close.</p>
+</header>
+
+<!-- ① Architecture -->
+<section>
+  <h2>① System Architecture — <code>Target = F(Source)</code></h2>
+  <a class="img-wrap" href="#" data-src="images/pocket-architecture.svg">
+    <img src="images/pocket-architecture.svg"
+         alt="Pocket Knowledge Ops architecture: Source → Refine → Transform → Load → Serve,
+              with optional GraphRAG branch and the pocket eval regression harness"
+         loading="lazy" />
+  </a>
+  <p class="caption">
+    <strong>Figure 1.</strong> The full pipeline — five incremental stages, three serve surfaces
+    (CLI / MCP / REST + Web UI), the optional knowledge-graph branch, and the
+    <code>pocket eval</code> regression harness.
+  </p>
+</section>
+
+<!-- ② Pipeline Flow -->
+<section>
+  <h2>② Pipeline Flow — Source → Refine → Transform → Load → Serve</h2>
+  <a class="img-wrap" href="#" data-src="images/pipeline-flow.svg">
+    <img src="images/pipeline-flow.svg"
+         alt="genome-pocket pipeline flow: Source → Refine → Transform → Load → Serve,
+              with SemanticSplitter ⚡, HyDE ⚡, Cross-encoder Reranker ⚡, LLM Judge ⚡, Schema JSON ⚡"
+         loading="lazy" />
+  </a>
+  <p class="caption">
+    <strong>Figure 2.</strong> Data flow through the PocketIndex declarative ETL engine, including
+    2026 SOTA optional stages (⚡).
+  </p>
+</section>
+
+<!-- ③ Roadmap -->
+<section>
+  <h2>③ Roadmap — cocoindex migration phases + 2026 SOTA improvements</h2>
+  <a class="img-wrap" href="#" data-src="images/roadmap.svg">
+    <img src="images/roadmap.svg"
+         alt="genome-pocket roadmap: cocoindex migration phases P0–P6 and 2026 SOTA improvements
+              POCKET-601 through POCKET-607"
+         loading="lazy" />
+  </a>
+  <p class="caption">
+    <strong>Figure 3.</strong> Phased migration to the native cocoindex runtime (P0–P6) and
+    2026 SOTA feature tracking (POCKET-601–607).
+  </p>
+</section>
+
+<!-- lightbox -->
+<div id="lb" role="dialog" aria-modal="true" aria-label="Image viewer">
+  <button id="lb-close" aria-label="Close">×</button>
+  <img id="lb-img" src="" alt="" />
+</div>
+
+<footer>
+  <a href="../README.md">README</a> ·
+  <a href="https://github.com/akillness/genome-pocket">GitHub</a> ·
+  genome-pocket — local-first personal knowledge runtime
+</footer>
+
+<script>
+(function () {
+  const lb    = document.getElementById('lb');
+  const lbImg = document.getElementById('lb-img');
+  const lbClose = document.getElementById('lb-close');
+
+  // open on thumbnail click
+  document.querySelectorAll('a.img-wrap').forEach(function (a) {
+    a.addEventListener('click', function (e) {
+      e.preventDefault();
+      var src = a.dataset.src;
+      var alt = a.querySelector('img').alt;
+      lbImg.src = src;
+      lbImg.alt = alt;
+      lb.classList.add('open');
+      document.body.style.overflow = 'hidden';
+    });
+  });
+
+  // close on overlay click or × button
+  function closeLb() {
+    lb.classList.remove('open');
+    document.body.style.overflow = '';
+    lbImg.src = '';
+  }
+  lb.addEventListener('click', function (e) {
+    if (e.target === lb) closeLb();
+  });
+  lbClose.addEventListener('click', closeLb);
+
+  // close on Esc
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape') closeLb();
+  });
+})();
+</script>
+</body>
+</html>

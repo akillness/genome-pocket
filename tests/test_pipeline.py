@@ -376,5 +376,153 @@ class TestPocketPipeline(unittest.TestCase):
         self.assertNotIn(1, ids, "aborted source's row must not persist")
         self.assertIn(2, ids, "committed source's row must persist")
 
+    def test_diff_action_uses_statediff_semantics(self):
+        """POCKET-P4: the per-row write decision is driven by cocoindex's
+        ``statediff.diff`` (insert for a new key, None when already converged,
+        replace when the stored row differs)."""
+        from dataclasses import dataclass
+        from pocketindex.connectors import sqlite
+        import asyncio
+
+        self.assertTrue(
+            sqlite._HAVE_STATEDIFF,
+            "cocoindex statediff must back the delta-write path in this env",
+        )
+
+        @dataclass
+        class Row:
+            id: int
+            val: str
+
+        async def build():
+            conn = sqlite.ManagedConnection(str(self.db_path), load_vec=False)
+            await conn.__aenter__()
+            try:
+                schema = await sqlite.TableSchema.from_class(Row, primary_key=["id"])
+                target = sqlite.TableTarget(conn, "t", schema)
+                return (
+                    target._diff_action("fp", None),     # no stored row yet
+                    target._diff_action("fp", "fp"),      # identical -> converged
+                    target._diff_action("fp", "other"),   # differs -> rewrite
+                )
+            finally:
+                await conn.__aexit__(None, None, None)
+
+        new_key, unchanged, changed = asyncio.run(build())
+        self.assertEqual(new_key, "insert")
+        self.assertIsNone(unchanged)
+        self.assertEqual(changed, "replace")
+
+    def test_statediff_skips_unchanged_rows_on_redeclare(self):
+        """POCKET-P4: re-declaring a source rewrites only the rows that changed.
+
+        Reprocessing must not blindly re-UPSERT every emitted row. Rows whose
+        content is byte-identical to what is stored converge to a no-op write,
+        so an edit touches just the changed chunk while the unchanged rows (and
+        the lexical index) are left alone — yet they are still attributed to the
+        source so end_source does not sweep them as orphans.
+        """
+        from dataclasses import dataclass
+        from pocketindex.connectors import sqlite
+        import pocketindex as pix
+        import asyncio
+
+        @dataclass
+        class Row:
+            id: int
+            val: str
+
+        async def build():
+            conn = sqlite.ManagedConnection(str(self.db_path), load_vec=False)
+            await conn.__aenter__()
+            try:
+                schema = await sqlite.TableSchema.from_class(Row, primary_key=["id"])
+                target = sqlite.TableTarget(conn, "t", schema)
+
+                # First pass: three brand-new rows are all written.
+                tok = pix._current_source_key.set("S")
+                target.begin_source("S")
+                for i in range(3):
+                    target.declare_row(Row(id=i, val=f"v{i}"))
+                pix._current_source_key.reset(tok)
+                target.end_source("S", "h1")
+                self.assertEqual(target.num_row_writes, 3)
+                self.assertEqual(target.num_row_skips, 0)
+
+                # Second pass: same ids, but only row 1 is edited.
+                w0, s0 = target.num_row_writes, target.num_row_skips
+                tok = pix._current_source_key.set("S")
+                target.begin_source("S")
+                target.declare_row(Row(id=0, val="v0"))      # unchanged
+                target.declare_row(Row(id=1, val="EDITED"))  # changed
+                target.declare_row(Row(id=2, val="v2"))      # unchanged
+                pix._current_source_key.reset(tok)
+                target.end_source("S", "h2")
+
+                self.assertEqual(
+                    target.num_row_writes - w0, 1,
+                    "only the edited row is physically written",
+                )
+                self.assertEqual(
+                    target.num_row_skips - s0, 2,
+                    "byte-identical rows converge to a no-op skip",
+                )
+
+                rows = dict(conn.execute("SELECT id, val FROM t").fetchall())
+                return rows
+            finally:
+                await conn.__aexit__(None, None, None)
+
+        rows = asyncio.run(build())
+        self.assertEqual(
+            rows, {0: "v0", 1: "EDITED", 2: "v2"},
+            "the edit lands and the unchanged rows survive (not swept as orphans)",
+        )
+
+    def test_delta_writes_skip_unchanged_rows_in_pipeline(self):
+        """POCKET-P4 end to end: forcing a reprocess of unchanged content writes
+        zero rows and skips them all, and the engine reports those state-diff
+        deltas in its per-component stats."""
+        import pocket.pipeline as pipeline
+
+        def make_app():
+            return pix.App(
+                "pocket_test",
+                pipeline.app_main,
+                sourcedir=self.source_dir,
+                db_path=self.db_path,
+            )
+
+        # First run: every chunk is a brand-new write.
+        stats = make_app().update_blocking(live=False, report_to_stdout=False)
+        base_rows = self._count_rows()
+        self.assertGreater(base_rows, 0)
+        self.assertEqual(stats.total.num_row_writes, base_rows)
+        self.assertEqual(stats.total.num_row_skips, 0)
+
+        # Force a reprocess of every file *without editing it* by disabling memo,
+        # so process_file actually re-declares its rows on the second run.
+        original = pipeline.process_file
+
+        async def no_memo(file, table):
+            return await original(file, table)
+
+        no_memo._pix_fn = True
+        no_memo._memo = False
+        pipeline.process_file = no_memo
+        try:
+            stats = make_app().update_blocking(live=False, report_to_stdout=False)
+        finally:
+            pipeline.process_file = original
+
+        # Unchanged content -> identical chunk ids/text/embeddings -> every
+        # re-declared row converges to a no-op skip; nothing is rewritten.
+        self.assertEqual(
+            stats.total.num_row_writes, 0,
+            "reprocessing unchanged content must not rewrite any row",
+        )
+        self.assertEqual(stats.total.num_row_skips, base_rows)
+        self.assertEqual(self._count_rows(), base_rows, "row set is unchanged")
+
 if __name__ == "__main__":
     unittest.main()

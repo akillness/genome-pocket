@@ -1,0 +1,43 @@
+{
+  "_about": "Graded gold set for genome-pocket retrieval (POCKET-501/502/503/504 measurement loop). Unlike the synthesized single-file cases, several queries here have MULTIPLE relevant files and are hand-built to exercise fusion/routing behaviours: result diversity (MMR, POCKET-501), weighted RRF (POCKET-502), query expansion (POCKET-503), and the semantic query router (POCKET-504, mode='auto'). Run: `pocket eval --cases eval/gold.json --mode hybrid` (loaded cases keep their own per-case mode; add --mmr to measure the diversity trade-off, --expand for query expansion, --tune to grid-search fusion weights). The corpus lives in eval/corpus/.",
+
+  "cases": [
+    {
+      "query": "cache eviction policy entry removal",
+      "relevant_files": ["cache_lru.md", "cache_ttl.md"],
+      "mode": "hybrid",
+      "note": "Diversity (POCKET-501): cache_lru.md is surrounded by near-duplicate paraphrases (cache_lru_alt/_more/_x1/_x2) that crowd the top-k, so plain fusion buries the second distinct answer cache_ttl.md. MMR should demote the redundant copies and recover both relevant files -> higher Recall@k."
+    },
+    {
+      "query": "zebrastripe shared common pattern",
+      "relevant_files": ["rare_anchor.md"],
+      "mode": "hybrid",
+      "note": "Weighted fusion (POCKET-502): the vector strategy favours the keyword-dense distractor common_blend.md (and blend_two/_three), while BM25 rewards the rare 'zebrastripe' token in the relevant rare_anchor.md. Equal-weight RRF ranks the distractors above it; down-weighting the vector strategy lifts MAP."
+    },
+    {
+      "query": "breadth first search neighbor frontier",
+      "relevant_files": ["graph_bfs.md"],
+      "mode": "hybrid",
+      "note": "Natural single-answer case for a sanity floor."
+    },
+    {
+      "query": "time to live cache expiry lifetime",
+      "relevant_files": ["cache_ttl.md"],
+      "mode": "hybrid",
+      "note": "Natural single-answer case for a sanity floor."
+    },
+    {
+      "query": "wal journaling durability",
+      "relevant_files": ["db_wal.md", "db_journal.md"],
+      "mode": "hybrid",
+      "note": "Query expansion (POCKET-503): 'wal' is an abbreviation that appears in NO document, so without expansion BM25 has no token to match and the embedding shares no vocabulary with db_wal.md -- only db_journal.md (matching 'journaling durability') surfaces, Recall@3=0.5. With expansion 'wal' -> 'write ahead log', db_wal.md is also retrieved -> Recall@3=1.0. db_journal.md is always found, so the hit-rate floor holds with or without expansion."
+    },
+    {
+      "query": "parse_payload validation",
+      "relevant_files": ["router_anchor.md"],
+      "mode": "auto",
+      "note": "Semantic query router (POCKET-504): the query is code-shaped (snake_case 'parse_payload'), so the router picks lexical exact-match. FTS5 splits 'parse_payload' into the rare phrase parse+payload that lives only in router_anchor.md (BM25 ranks it #1 on those high-IDF terms), while the keyword-dense distractors router_blend_a/b/c.md repeat the shared word 'validation' and dominate the diluted bag-of-words vector. Under hybrid a vector-favoured distractor outranks the answer; auto routing drops the misleading vector strategy so the answer is #1 (MAP=1.0). hit_rate/Recall@k stay 1.0 either way -- this is a ranking (MAP) win, not a recall floor."
+    }
+
+  ]
+}

@@ -2,8 +2,21 @@
 import sqlite3
 import sqlite_vec
 import pathlib
+import hashlib
 from typing import Any, Dict, List, Type, get_type_hints, Annotated
 import numpy as np
+
+try:
+    # Adopt cocoindex's state-diff semantics for per-row write decisions so the
+    # target only touches rows that actually changed (POCKET-P4). DiffAction is
+    # one of 'insert' | 'upsert' | 'replace' | 'delete' | None(=already converged).
+    from cocoindex.connectorkits.statediff import (
+        diff as _statediff_diff,
+        TrackingRecordTransition as _TrackingRecordTransition,
+    )
+    _HAVE_STATEDIFF = True
+except ImportError:  # cocoindex not installed; use the built-in fallback below.
+    _HAVE_STATEDIFF = False
 
 class ManagedConnection:
     def __init__(self, db_path: str, load_vec: bool = True):
@@ -68,6 +81,10 @@ class TableTarget:
         self._pk = schema.primary_key[0]
         # Per-source set of primary-key values emitted during the current run.
         self._emitted: Dict[str, set] = {}
+        # Running tallies of physical row writes vs. no-op skips across this
+        # target's lifetime, so the engine can report state-diff delta activity.
+        self.num_row_writes = 0
+        self.num_row_skips = 0
         # Optional lexical (FTS5) companion index for hybrid retrieval. When a
         # text column is named, every declared row is mirrored into an external
         # FTS5 table keyed by the primary key, so the same target supports both
@@ -262,13 +279,89 @@ class TableTarget:
         self.conn.commit()
         return len(removed)
 
+    # ----- State-diff delta writes (POCKET-P4) -------------------------------
+    @staticmethod
+    def _encode_value(value: Any) -> bytes:
+        """Deterministic byte encoding for one column value.
+
+        Mirrors how the value is materialised in SQLite so a stored row read
+        back compares equal to the same row about to be written: BLOBs (already
+        serialised embeddings) pass through untouched, scalars get a 1-byte type
+        tag so an int 1 never collides with the string "1".
+        """
+        if isinstance(value, (bytes, bytearray)):
+            return bytes(value)
+        if value is None:
+            return b"\x00NULL"
+        if isinstance(value, bool):
+            return b"b1" if value else b"b0"
+        if isinstance(value, int):
+            return b"i" + str(value).encode("utf-8")
+        if isinstance(value, float):
+            return b"f" + repr(value).encode("utf-8")
+        if isinstance(value, str):
+            return b"s" + value.encode("utf-8")
+        return b"r" + repr(value).encode("utf-8")
+
+    def _row_fingerprint(self, values) -> str:
+        """Order- and boundary-sensitive fingerprint of a row's non-key values."""
+        h = hashlib.sha256()
+        for v in values:
+            chunk = self._encode_value(v)
+            # Length-prefix each field so ("a", "bc") never hashes like ("ab", "c").
+            h.update(len(chunk).to_bytes(8, "big"))
+            h.update(chunk)
+        return h.hexdigest()
+
+    def _stored_fingerprint(self, pk_value, non_pk_cols):
+        """Fingerprint of the currently-stored row, or None if no row exists."""
+        if not non_pk_cols:
+            # Key-only table: convergence is purely about existence.
+            cur = self.conn.execute(
+                f"SELECT 1 FROM {self.table_name} WHERE {self._pk} = ?", (pk_value,)
+            )
+            return "" if cur.fetchone() is not None else None
+        cur = self.conn.execute(
+            f"SELECT {', '.join(non_pk_cols)} FROM {self.table_name} "
+            f"WHERE {self._pk} = ?",
+            (pk_value,),
+        )
+        row = cur.fetchone()
+        if row is None:
+            return None
+        return self._row_fingerprint(row)
+
+    def _diff_action(self, desired_fp, prev_fp):
+        """Decide the write needed via cocoindex state-diff semantics.
+
+        ``prev_may_be_missing`` is True exactly when no row is currently stored,
+        which makes ``statediff.diff`` emit ``insert`` for new keys; when a row
+        exists our knowledge of the previous state is complete, so an identical
+        fingerprint converges to ``None`` (skip) and a different one to
+        ``replace``. Returns one of ``insert``/``replace``/``None``.
+        """
+        if _HAVE_STATEDIFF:
+            prev = () if prev_fp is None else (prev_fp,)
+            transition = _TrackingRecordTransition(
+                desired=desired_fp,
+                prev=prev,
+                prev_may_be_missing=prev_fp is None,
+            )
+            return _statediff_diff(transition)
+        # Built-in fallback producing the same outcomes as statediff.diff.
+        if prev_fp is None:
+            return "insert"
+        return None if prev_fp == desired_fp else "replace"
+
     def declare_row(self, row: Any) -> None:
-        # Upsert the row into the table
         fields = self.schema.fields
         cols = []
         vals = []
         placeholders = []
-        
+        non_pk_cols = []
+        non_pk_vals = []
+        pk_value = getattr(row, self._pk)
+
         for name, hint in fields.items():
             val = getattr(row, name)
             # If it's a numpy array (embedding), serialize it for sqlite-vec
@@ -277,37 +370,57 @@ class TableTarget:
             cols.append(name)
             vals.append(val)
             placeholders.append("?")
-            
-        # SQLite UPSERT syntax
-        pk_cols = ", ".join(self.schema.primary_key)
-        update_cols = [f"{c} = excluded.{c}" for c in cols if c not in self.schema.primary_key]
-        
-        if update_cols:
-            sql = f"""
-                INSERT INTO {self.table_name} ({', '.join(cols)})
-                VALUES ({', '.join(placeholders)})
-                ON CONFLICT({pk_cols}) DO UPDATE SET {', '.join(update_cols)}
-            """
+            if name not in self.schema.primary_key:
+                non_pk_cols.append(name)
+                non_pk_vals.append(val)
+
+        # State-diff: write only when the desired row differs from what is
+        # already stored, so reprocessing a source rewrites just the chunks that
+        # actually changed instead of re-upserting (and churning the FTS index
+        # for) every row it re-emits.
+        desired_fp = self._row_fingerprint(non_pk_vals)
+        prev_fp = self._stored_fingerprint(pk_value, non_pk_cols)
+        action = self._diff_action(desired_fp, prev_fp)
+
+        if action is not None:
+            pk_cols = ", ".join(self.schema.primary_key)
+            update_cols = [
+                f"{c} = excluded.{c}"
+                for c in cols
+                if c not in self.schema.primary_key
+            ]
+            if update_cols:
+                sql = f"""
+                    INSERT INTO {self.table_name} ({', '.join(cols)})
+                    VALUES ({', '.join(placeholders)})
+                    ON CONFLICT({pk_cols}) DO UPDATE SET {', '.join(update_cols)}
+                """
+            else:
+                sql = f"""
+                    INSERT OR IGNORE INTO {self.table_name} ({', '.join(cols)})
+                    VALUES ({', '.join(placeholders)})
+                """
+            self.conn.execute(sql, tuple(vals))
+
+            # Mirror the searchable text into the lexical (FTS5) index so the
+            # same declared row is retrievable by both vector and keyword search.
+            # Only touched when the row was actually written, so unchanged rows
+            # leave the BM25 index alone.
+            if self._fts_text_column is not None:
+                self._fts_upsert(pk_value, getattr(row, self._fts_text_column))
+            self.num_row_writes += 1
         else:
-            sql = f"""
-                INSERT OR IGNORE INTO {self.table_name} ({', '.join(cols)})
-                VALUES ({', '.join(placeholders)})
-            """
-            
-        self.conn.execute(sql, tuple(vals))
+            self.num_row_skips += 1
 
-        # Mirror the searchable text into the lexical (FTS5) index so the same
-        # declared row is retrievable by both vector and keyword search.
-        if self._fts_text_column is not None:
-            self._fts_upsert(getattr(row, self._pk), getattr(row, self._fts_text_column))
-
-        # Attribute this row to the source item currently being processed so
-        # the engine can reconcile/sweep it later.
+        # Attribute this row to the source item currently being processed so the
+        # engine can reconcile/sweep it later. This MUST happen even when the
+        # write was skipped, otherwise an unchanged-but-re-emitted row would look
+        # like an orphan and be deleted by end_source.
         from pocketindex import get_current_source_key
 
         source_key = get_current_source_key()
         if source_key is not None:
-            self._emitted.setdefault(source_key, set()).add(getattr(row, self._pk))
+            self._emitted.setdefault(source_key, set()).add(pk_value)
 
 async def mount_table_target(
     sqlite_db_key: Any,

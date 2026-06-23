@@ -189,11 +189,14 @@ def _interactive_graph_review(echo=click.echo, prompt=click.prompt):
 @click.option("--limit", default=5, help="Number of results to return")
 @click.option(
     "--mode",
-    type=click.Choice(["hybrid", "vector", "lexical", "graph"]),
+    type=click.Choice(["auto", "hybrid", "vector", "lexical", "graph"]),
     default="hybrid",
     help="Retrieval strategy: hybrid (vector+lexical+graph RRF), vector, "
-    "lexical, or graph (entity-anchored multi-hop traversal).",
+    "lexical, graph (entity-anchored multi-hop traversal), or auto "
+    "(POCKET-504: pick the mode from the query's shape — code-like queries "
+    "go lexical, relationship questions go graph, else hybrid).",
 )
+
 @click.option(
     "--mmr/--no-mmr",
     "mmr",
@@ -216,13 +219,21 @@ def _interactive_graph_review(echo=click.echo, prompt=click.prompt):
     "vector search (overrides POCKET_HYDE; requires a running Ollama daemon).",
 )
 @click.option(
+    "--expand/--no-expand",
+    "expand",
+    default=None,
+    help="Augment the query with deterministic synonym/acronym expansion terms "
+    "before retrieval (POCKET-503; overrides POCKET_QUERY_EXPANSION, default "
+    "follows config). Offline, no daemon required.",
+)
+@click.option(
     "--json",
     "as_json",
     is_flag=True,
     help="Emit results as a JSON array on stdout (agent-native; "
     "human status lines go to stderr).",
 )
-def search(query, limit, mode, mmr, rerank, hyde, as_json):
+def search(query, limit, mode, mmr, rerank, hyde, expand, as_json):
     """Search the indexed notes using hybrid (vector + lexical) retrieval."""
     if as_json:
         # stdout stays pure JSON so a calling agent can parse it; status and
@@ -234,7 +245,7 @@ def search(query, limit, mode, mmr, rerank, hyde, as_json):
             )
             click.echo("[]")
             return
-        hits = retrieval.search(query, limit=limit, mode=mode, use_mmr=mmr, use_reranker=rerank, use_hyde=hyde)
+        hits = retrieval.search(query, limit=limit, mode=mode, use_mmr=mmr, use_reranker=rerank, use_hyde=hyde, use_expansion=expand)
         click.echo(
             json.dumps(
                 {
@@ -255,7 +266,7 @@ def search(query, limit, mode, mmr, rerank, hyde, as_json):
         click.echo("Database does not exist. Please run 'pocket update' first.")
         return
 
-    hits = retrieval.search(query, limit=limit, mode=mode, use_mmr=mmr, use_reranker=rerank, use_hyde=hyde)
+    hits = retrieval.search(query, limit=limit, mode=mode, use_mmr=mmr, use_reranker=rerank, use_hyde=hyde, use_expansion=expand)
     click.echo(retrieval.format_hits(hits))
 
 
@@ -313,6 +324,13 @@ def search(query, limit, mode, mmr, rerank, hyde, as_json):
     default="mean_average_precision",
     help="Metric the --tune grid search maximizes.",
 )
+@click.option(
+    "--tune-method",
+    type=click.Choice(["grid", "coordinate"]),
+    default="grid",
+    help="Search strategy for --tune: exhaustive 'grid' (default) or cheaper "
+    "'coordinate' ascent (optimize one strategy at a time).",
+)
 
 @click.option(
     "--save-weights",
@@ -321,6 +339,24 @@ def search(query, limit, mode, mmr, rerank, hyde, as_json):
     default=None,
     help="With --tune, write the winning weights here (point "
     "POCKET_RRF_WEIGHTS_FILE at it to make search/eval use them).",
+)
+@click.option(
+    "--mmr/--no-mmr",
+
+    "mmr",
+    default=None,
+    help="Re-rank with Maximal Marginal Relevance before scoring, so the "
+    "harness measures the MMR diversity trade-off (POCKET-501) on the cases "
+    "(overrides POCKET_MMR; default follows config). Ignored with --tune.",
+)
+@click.option(
+    "--expand/--no-expand",
+    "expand",
+    default=None,
+    help="Augment each query with deterministic synonym/acronym expansion "
+    "before scoring, so the harness measures the query-expansion recall lift "
+    "(POCKET-503; overrides POCKET_QUERY_EXPANSION, default follows config). "
+    "Ignored with --tune.",
 )
 @click.option(
     "--with-judge",
@@ -335,7 +371,8 @@ def search(query, limit, mode, mmr, rerank, hyde, as_json):
     default=None,
     help="Ollama model to use as judge (default: POCKET_HYDE_OLLAMA_MODEL).",
 )
-def eval_cmd(k, mode, cases_file, per_file, baseline_file, save_file, tolerance, show_cases, tune, tune_metric, weights_file, with_judge, judge_model):
+def eval_cmd(k, mode, cases_file, per_file, baseline_file, save_file, tolerance, show_cases, tune, tune_metric, tune_method, weights_file, mmr, expand, with_judge, judge_model):
+
 
     """Evaluate retrieval quality and guard against regressions (POCKET-303).
 
@@ -365,9 +402,12 @@ def eval_cmd(k, mode, cases_file, per_file, baseline_file, save_file, tolerance,
 
 
     if tune:
-        result = evaluation.tune_weights(cases, k=k, metric=tune_metric)
+        result = evaluation.tune_weights(
+            cases, k=k, metric=tune_metric, method=tune_method
+        )
         click.echo(
-            f"Tuned RRF weights over {len(result.trials)} combination(s) "
+            f"Tuned RRF weights via {tune_method} search over "
+            f"{len(result.trials)} combination(s) "
             f"(varying {', '.join(result.tuned_strategies) or 'nothing'}), "
             f"maximizing {result.metric}:"
         )
@@ -392,7 +432,8 @@ def eval_cmd(k, mode, cases_file, per_file, baseline_file, save_file, tolerance,
             )
         return
 
-    metrics = evaluation.evaluate(cases, k=k)
+    metrics = evaluation.evaluate(cases, k=k, use_mmr=mmr, use_expansion=expand)
+
     click.echo(evaluation.format_report(metrics, show_cases=show_cases))
 
     if with_judge:

@@ -13,10 +13,10 @@ Sequence your knowledge. Carry the whole map in your pocket.
 
 ## 🖼️ Concept & Architecture
 
+> 📐 **Click any diagram below** — GitHub opens a lightbox popup. For a dedicated gallery with zoom, open [`docs/index.html`](docs/index.html) locally.
+
 <p align="center">
-  <a href="docs/images/pocket-architecture.svg">
-    <img src="docs/images/pocket-architecture.svg" alt="Pocket Knowledge Ops architecture: Source → Refine → Transform → Load → Serve, with optional GraphRAG branch and the pocket eval regression harness" width="100%" />
-  </a>
+  <img src="docs/images/pocket-architecture.svg" alt="Pocket Knowledge Ops architecture: Source → Refine → Transform → Load → Serve, with optional GraphRAG branch and the pocket eval regression harness" style="max-width:100%;width:100%;cursor:zoom-in;" />
 </p>
 
 <p align="center"><sub><b>Figure 1.</b> The full <code>Target = F(Source)</code> pipeline — five incremental stages, the three serve surfaces (CLI / MCP / REST + Web UI), the optional knowledge-graph branch, and the <code>pocket eval</code> regression harness that scores the same retrieval path.</sub></p>
@@ -26,9 +26,7 @@ Pocket operates on the core mental model of **Target = F(Source)**. All data pro
 ### Data flow at a glance
 
 <p align="center">
-  <a href="docs/images/pipeline-flow.svg">
-    <img src="docs/images/pipeline-flow.svg" alt="genome-pocket pipeline flow: Source → Refine → Transform → Load → Serve, with SemanticSplitter ⚡, HyDE ⚡, Cross-encoder Reranker ⚡, LLM Judge ⚡, Schema JSON ⚡" width="100%" />
-  </a>
+  <img src="docs/images/pipeline-flow.svg" alt="genome-pocket pipeline flow: Source → Refine → Transform → Load → Serve, with SemanticSplitter ⚡, HyDE ⚡, Cross-encoder Reranker ⚡, LLM Judge ⚡, Schema JSON ⚡" style="max-width:100%;width:100%;cursor:zoom-in;" />
 </p>
 
 
@@ -315,8 +313,9 @@ pocket serve --host 127.0.0.1 --port 8000     # or: pocket-api
 Open <http://127.0.0.1:8000/> for the built-in **query-tracing & lineage Web UI** — a
 single dependency-free page (no build step, no front-end framework) that visualizes
 **how a query was routed** (which strategies each mode activates, whether they are
-available on the target, and how many candidates each produced) and **which source
-files contributed** to the fused result, with per-file chunk lineage on demand.
+files contributed** to the fused result, with per-file chunk lineage on demand. A
+**Pending review** panel on the same page lists the low-confidence graph facts the
+HITL gate staged and lets you approve or reject them one-by-one or in bulk (POCKET-505).
 
 Endpoints:
 - `GET /` — query-tracing & lineage Web UI.
@@ -326,12 +325,17 @@ Endpoints:
 - `GET /trace?q=<query>&mode=hybrid&limit=5` — routing trace (active/available strategies, candidate counts, per-hit contributors); `mode=auto` reports the routed mode.
 
 - `GET /lineage?file_path=<path>` — ordered chunk lineage for a source file.
+- `GET /pending` — graph facts the confidence gate staged for HITL review (entity/relation ids are returned as **strings** so 64-bit ids survive JavaScript).
+- `POST /pending/approve` / `POST /pending/reject` — commit or discard staged facts; JSON body `{"ids": ["…"]}` targets specific ids, or omit `ids` (or send `null`) to act on all pending. The built-in Web UI's **Pending review** panel drives these.
 
 ```bash
 curl "http://127.0.0.1:8000/search?q=pocket&mode=hybrid&limit=3"
 curl "http://127.0.0.1:8000/trace?q=pocket&mode=hybrid&limit=3"
 curl -X POST http://127.0.0.1:8000/search -H 'Content-Type: application/json' \
      -d '{"query": "incremental sync", "mode": "vector"}'
+curl "http://127.0.0.1:8000/pending"
+curl -X POST http://127.0.0.1:8000/pending/approve -H 'Content-Type: application/json' \
+     -d '{"ids": ["123456789"]}'
 ```
 
 
@@ -427,22 +431,20 @@ To connect Claude Code or Cursor to your Pocket knowledge base, add the followin
 ## 🗺️ Roadmap
 
 <p align="center">
-  <a href="docs/images/roadmap.svg">
-    <img src="docs/images/roadmap.svg" alt="genome-pocket roadmap: cocoindex migration phases P0–P6 and 2026 SOTA improvements POCKET-601 through POCKET-607" width="100%" />
-  </a>
+  <img src="docs/images/roadmap.svg" alt="genome-pocket roadmap: cocoindex migration phases P0–P6 and 2026 SOTA improvements POCKET-601 through POCKET-607" style="max-width:100%;width:100%;cursor:zoom-in;" />
 </p>
 
 Genome-pocket is evolving toward full adoption of the `cocoindex` runtime. The phased plan (full details in [`docs/architecture/cocoindex-gap.md`](docs/architecture/cocoindex-gap.md)):
 
 | Phase | What | Status |
 |-------|------|--------|
-| P0 | **Test infra** — `MockEmbedder` session patch; the whole suite (now 153 tests) runs offline in < 10 s via `bash run_tests.sh` | ✅ done |
+| P0 | **Test infra** — `MockEmbedder` session patch; the whole suite (now 162 tests) runs offline in < 10 s via `bash run_tests.sh` | ✅ done |
 
 
 | P1 | **Content fingerprinting** — `cocoindex.connectorkits.fingerprint` replaces SHA-256 in `_compute_memo_hash`; unchanged files skip re-index | ✅ done |
 | P2 | **Concurrent `map()`** — `asyncio.gather` replaces sequential loop; matches real cocoindex contract | ✅ done |
 | P3 | **`list_concepts` MCP** — live graph query via `retrieval.list_graph_concepts()`; `POCKET_GRAPH=1` guard | ✅ done |
-| P4 | **State-diff delta writes** — `connectorkits.statediff.DiffAction` for proper upsert/delete; prevents chunk accumulation on edits | ⏳ next |
+| P4 | **State-diff delta writes** — `connectorkits.statediff.diff` drives a per-row `insert`/`replace`/skip decision in `sqlite.TableTarget.declare_row`; reprocessing rewrites only changed rows (no FTS churn) and `UpdateStats` reports `row_writes`/`row_skips` | ✅ done |
 | P5 | **Persistent memo store** — SQLite-backed `@fn(memo=True)` that survives restarts | ⏳ planned |
 | P6 | **Native cocoindex PoC** — `pocket/pipeline_coco.py` (run via `POCKET_PIPELINE=coco`): real cocoindex splitter/embedder ops wired in; full `App`/`fn`/`map` engine swap pending | 🚧 in progress |
 

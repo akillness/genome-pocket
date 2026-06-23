@@ -106,7 +106,7 @@ OUTCOME: increase "grounded retrievals per active week"
 │     └─ richer MCP tool surface (graph, lineage)    (candidate)
 │
 ├─ O4 · Index goes stale / bloats on edits
-│     ├─ POCKET-P4 state-diff delta writes           (roadmap, "next")
+│     ├─ POCKET-P4 state-diff delta writes           ✅ shipped this cycle
 │     └─ POCKET-P5 persistent memo                    (roadmap)
 │
 └─ O5 · New users can't tell if it's working (onboarding)

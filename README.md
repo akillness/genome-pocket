@@ -462,3 +462,14 @@ Genome-pocket is evolving toward full adoption of the `cocoindex` runtime. The p
 | POCKET-606 | **LanceDB connector** — columnar vector store for large corpora (>1 M chunks) | ⏳ planned |
 | POCKET-607 | **GraphRAG community detection** — Leiden algorithm over entity graph; community-level summaries | ⏳ planned |
 See [`docs/architecture/cocoindex-gap.md`](docs/architecture/cocoindex-gap.md) for the full gap analysis, missing APIs, and migration sequencing.
+
+---
+
+## 🤝 Codex Impact Workshop (Seoul Environmental Association)
+Preparation documents and strategy guides for the **Codex Impact Workshop** (Seoul Federation for Environmental Movement / 서울환경연합) are located in the [`docs/jeo_position/`](docs/jeo_position/) directory:
+- [Context Brief](docs/jeo_position/00-context-brief.md) — Persona, JTBD, North Star Metric, and Assumption Map.
+- [Preparation Checklist](docs/jeo_position/01-preparation.md) — Pre-workshop checklist, sync meeting agenda, and developer setup.
+- [Workable Scope](docs/jeo_position/02-scope.md) — Opportunity Solution Tree, RICE priority matrix, and scope tiers.
+- [3-Hour Technical Challenges](docs/jeo_position/03-tech-challenges-3h.md) — MVP scenarios, timeline, tech stack comparison, and risks.
+- [Product Naming](docs/jeo_position/04-product-naming.md) — Naming candidates for the internal media monitoring tool.
+- [Credits & API Experiments](docs/jeo_position/05-credits-and-api-experiments.md) — OpenAI API usage mapping, cost guardrails, and 3-hour experiment plan.

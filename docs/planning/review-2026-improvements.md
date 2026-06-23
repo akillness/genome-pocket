@@ -128,8 +128,33 @@ running the suite (`bash run_tests.sh` → **91 tests pass offline in ~5 s**):
   reprocess rewrites only changed rows and stops churning the FTS index — the
   orphan-deletion half was already covered by `end_source`/`sweep`. Runs report
   `row_writes`/`row_skips` via `UpdateStats`.
-- **POCKET-P5 · Persistent memo store.** SQLite-backed `@fn(memo=True)` that
-  survives process restarts.
+- **POCKET-P5 · Logic-fingerprint memo keying.** ✅ Shipped this pass. The memo
+  store was already SQLite-backed (`_pocket_memo` / `_pocket_extract_memo`) and
+  already survived process restarts — `test_incremental_memoization` rebuilds a
+  fresh `App`/target on the same DB between runs. The genuine remaining cocoindex
+  C4 gap was that our memo key folded only source content + embedding signature,
+  so editing a transform's *code* left unchanged files skipped on stale output.
+  `mount_each` now folds `_logic_fingerprint(func)` (`inspect.getsource` →
+  bytecode → qualname, hashed via cocoindex/SHA-256) into every memo key, so a
+  pipeline-code edit invalidates stale memos and forces a clean reprocess.
+- **POCKET-P6 · `full_reprocess` force-rebuild flag.** ✅ Shipped this pass.
+  Mirrors cocoindex's `App.update_blocking(full_reprocess=True)`: a new
+  `full_reprocess` keyword (surfaced as `pocket update --full-reprocess`) sets a
+  `_FULL_REPROCESS` contextvar so `mount_each` bypasses the memo fast-path and
+  re-runs every transform even on unchanged fingerprints — the on-demand escape
+  hatch for changes the fingerprint can't see (schema/target-format edits). The
+  P4 per-row state-diff still dedups physical writes, so a clean rebuild doesn't
+  duplicate or churn rows; live mode forces only the catch-up pass. This closes
+  the last cocoindex *critical* (C-series) gap.
+- **POCKET-W2 · Push-style live mode.** ✅ Shipped this pass. Live indexing is now
+  change-driven instead of blind interval polling: source connectors self-register
+  via `pocketindex.register_source`, `LocalFS.signature()` exposes a cheap
+  `(mtime, size)` map, and the live loop only re-runs the pipeline when an actual
+  add/edit/delete is observed — an idle watch costs a single `stat` scan per
+  interval rather than a full re-embedding pass, while edits are picked up promptly.
+  Sources without a `signature()` fall back to interval polling so no change is ever
+  silently missed. This closes the last cocoindex *workflow* gap; only the
+  native-cocoindex migration PoC remains.
 
 ### Ops & UX
 
@@ -163,11 +188,19 @@ real Recall@k/MAP wins (`tests/test_eval_proof.py`), and `pocket eval --mmr` /
 `--tune` / `--expand` plus `pocket search --mode auto` expose the trade-offs from
 the CLI. The Ops & UX queue advanced too: **POCKET-505 (HITL review in the Web
 UI)** now surfaces the pending-fact queue over REST and in the browser, and
-**POCKET-P4 (state-diff delta writes)** closed the last *next* item on the README
-cocoindex roadmap — `declare_row` now uses `connectorkits.statediff.diff` to skip
-no-op writes, so the only Engine-parity work left is **POCKET-P5 (persistent memo
-store)** to make `@fn(memo=True)` survive restarts. After that, **POCKET-506
-(answer synthesis with citations)** and **POCKET-507 (snippet highlighting)** build
+**POCKET-P4 (state-diff delta writes)**, **POCKET-P5 (logic-fingerprint memo
+keying)**, and **POCKET-P6 (`full_reprocess` flag)** closed the Engine-parity
+backlog: `declare_row` uses `connectorkits.statediff.diff` to skip no-op writes,
+`mount_each` folds a transform logic fingerprint into every memo key so a
+pipeline-code edit reprocesses unchanged files instead of serving old-code
+output, and `--full-reprocess` forces a clean rebuild on demand. **All cocoindex
+*critical* (C1–C5) gaps are now green, and the W2 live-mode push gap is closed
+too** — live indexing is change-driven (`register_source` + `LocalFS.signature()`),
+so idle watches cost only a `stat` scan and edits are picked up promptly. The only
+engine-parity item left is the eventual **native-cocoindex migration**
+(`pocket/pipeline_native.py` PoC).
+After that, **POCKET-506 (answer synthesis with citations)** and **POCKET-507
+(snippet highlighting)** build
 on the byte-exact lineage Pocket already carries. Smaller follow-ups still open: a
 non-deterministic local-LLM paraphrase backend on top of the POCKET-503 core,
 learning the POCKET-504 routing thresholds from labelled traffic, and

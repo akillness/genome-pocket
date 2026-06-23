@@ -13,12 +13,12 @@ from pocket.evaluation import METRIC_NAMES
 def _get_app_main():
     """Return the pipeline main function.
 
-    Set ``POCKET_PIPELINE=coco`` to use the Phase-4 PoC that runs real
+    Set ``POCKET_PIPELINE=native`` to use the Phase-4 PoC that runs real
     cocoindex ops (RecursiveSplitter, SentenceTransformerEmbedder) while
     keeping the pocketindex engine.  Default is the standard pipeline.
     """
-    if os.environ.get("POCKET_PIPELINE", "").lower() == "coco":
-        from pocket.pipeline_coco import app_main as _main
+    if os.environ.get("POCKET_PIPELINE", "").lower() == "native":
+        from pocket.pipeline_native import app_main as _main
         return _main
     from pocket.pipeline import app_main as _main
     return _main
@@ -64,7 +64,15 @@ def init():
     "confidence gate staged as pending (HITL). Ignored without --graph or "
     "in live mode; use 'pocket graph review' for the non-interactive flow.",
 )
-def update(live, interval, graph, review):
+@click.option(
+    "--full-reprocess",
+    is_flag=True,
+    help="Force a clean rebuild: reprocess every note even if its fingerprint "
+    "is unchanged. Use after a schema/extractor change the memo can't observe. "
+    "In live mode only the initial catch-up pass is forced; later polls stay "
+    "incremental.",
+)
+def update(live, interval, graph, review, full_reprocess):
     """Run the indexing pipeline to process notes."""
     click.echo(f"Starting indexing pipeline (live={live}, graph={graph})...")
 
@@ -83,8 +91,13 @@ def update(live, interval, graph, review):
     )
 
     # Run the update. The engine prints per-component stats after each pass.
+    if full_reprocess:
+        click.echo("Full reprocess requested: forcing a clean rebuild of all notes.")
     stats = app.update_blocking(
-        live=live, report_to_stdout=True, live_interval=interval
+        live=live,
+        report_to_stdout=True,
+        live_interval=interval,
+        full_reprocess=full_reprocess,
     )
     if stats is not None and not live:
         total = stats.total

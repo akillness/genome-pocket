@@ -28,6 +28,10 @@ class LocalFS:
 
     def items(self) -> Dict[str, FileLike]:
         # Walk the source directory and return a dict of relative paths to FileLike objects
+        from pocketindex import register_source
+
+        # Self-register so live mode can watch this directory for change events.
+        register_source(self)
         res = {}
         if not self.sourcedir.exists():
             return res
@@ -36,6 +40,23 @@ class LocalFS:
                 rel_path = p.relative_to(self.sourcedir)
                 res[str(rel_path)] = FileLike(p)
         return res
+
+    def signature(self) -> Dict[str, tuple]:
+        """Cheap change signature of the indexable files under ``sourcedir``.
+
+        Maps each indexable file's relative path to ``(mtime_ns, size)``. Live
+        mode compares successive signatures to detect adds, edits, and deletes
+        without re-running the full pipeline — a stat scan is orders of magnitude
+        cheaper than re-embedding every file."""
+        sig: Dict[str, tuple] = {}
+        if not self.sourcedir.exists():
+            return sig
+        for p in self.sourcedir.rglob("*"):
+            if p.is_file() and _is_indexable(p):
+                st = p.stat()
+                rel_path = p.relative_to(self.sourcedir)
+                sig[str(rel_path)] = (st.st_mtime_ns, st.st_size)
+        return sig
 
 def walk_dir(sourcedir: pathlib.Path, recursive: bool = True, live: bool = False) -> LocalFS:
     return LocalFS(sourcedir)

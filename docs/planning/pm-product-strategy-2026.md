@@ -47,7 +47,7 @@ Supporting jobs:
 - *(Functional)* "I want to find things by **meaning or by exact token**, and
   by **how concepts connect**" → satisfied by hybrid + GraphRAG.
 
-JTBD reframes the roadmap: P4/P5 (engine parity) serve the *freshness* job;
+JTBD reframes the roadmap: P4/P5/P6 (engine parity) serve the *freshness* job;
 the retrieval-quality and answer-synthesis backlog serves the *grounded-answer*
 and *trust* jobs — which is where differentiated user value concentrates.
 
@@ -78,7 +78,7 @@ delivered (not vanity index size) and is local-first measurable via the existing
 | Input metric | Why it moves the NSM | Where it's measured today |
 |---|---|---|
 | **Retrieval quality** (Hit@k / MRR / MAP) | Bad recall → unused results | ✅ `pocket eval` harness |
-| **Index freshness lag** | Stale index → wrong/missing hits | Δ-only ETL + watcher (P4/P5 reduce lag) |
+| **Index freshness lag** | Stale index → wrong/missing hits | Δ-only ETL + watcher (P4/P5/P6 reduce lag) |
 | **Time-to-first-value** | Onboarding friction kills adoption | ⚠️ not instrumented — see RAT-1 |
 | **Trust/citation rate** | Cited answers get acted on | ⚠️ needs O2 (answer synthesis) |
 
@@ -107,7 +107,9 @@ OUTCOME: increase "grounded retrievals per active week"
 │
 ├─ O4 · Index goes stale / bloats on edits
 │     ├─ POCKET-P4 state-diff delta writes           ✅ shipped this cycle
-│     └─ POCKET-P5 persistent memo                    (roadmap)
+│     ├─ POCKET-P5 logic-fingerprint memo            ✅ shipped this cycle
+│     ├─ POCKET-P6 full_reprocess force-rebuild      ✅ shipped this cycle
+│     └─ POCKET-W2 push-style live mode              ✅ shipped this cycle
 │
 └─ O5 · New users can't tell if it's working (onboarding)
       ├─ "pocket doctor" health/first-run check      (candidate)

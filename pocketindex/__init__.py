@@ -39,6 +39,60 @@ _ACTIVE_STATS: contextvars.ContextVar = contextvars.ContextVar(
     "pocket_active_stats", default=None
 )
 
+# When truthy, mount_each bypasses the memo fast-path so every source item is
+# reprocessed regardless of its stored fingerprint. Backs
+# ``App.update_blocking(full_reprocess=True)`` — a force-clean-rebuild on demand
+# (e.g. after a schema change the logic fingerprint can't observe). The per-row
+# state-diff in the target layer still dedups physical writes, so a full
+# reprocess re-runs every transform without needlessly rewriting unchanged rows.
+_FULL_REPROCESS: contextvars.ContextVar = contextvars.ContextVar(
+    "pocket_full_reprocess", default=False
+)
+
+# Collects the source connectors enumerated during a run so live mode can watch
+# exactly what was scanned. App.run_async seeds this with an empty list before
+# each run; connectors self-register via ``register_source`` from their item
+# enumeration. This backs W2 push-style live mode: instead of blindly re-running
+# the whole pipeline every interval, the live loop watches these sources' cheap
+# change signatures and only re-runs when an actual add/edit/delete is observed.
+_SCANNED_SOURCES: contextvars.ContextVar = contextvars.ContextVar(
+    "pocket_scanned_sources", default=None
+)
+
+
+def register_source(source: Any) -> None:
+    """Register a source connector scanned during the current run.
+
+    Connectors call this from their enumeration (e.g. ``LocalFS.items``) so that
+    live mode knows what to watch. A no-op outside an active run (when no
+    collection bag has been seeded). Sources that expose a ``signature()``
+    method participate in push-based change detection; others are ignored by the
+    watcher and fall back to interval polling.
+    """
+    bag = _SCANNED_SOURCES.get()
+    if bag is not None:
+        bag.append(source)
+
+
+def _sources_signature(sources: "List[Any]") -> Dict[Any, Any]:
+    """Combine the change signatures of watchable sources into one mapping.
+
+    Keys are namespaced by source position so two sources can't collide. Sources
+    lacking a ``signature()`` method contribute nothing (the caller treats an
+    all-empty signature with at least one such source as "unwatchable" and keeps
+    interval polling)."""
+    sig: Dict[Any, Any] = {}
+    for index, src in enumerate(sources):
+        getter = getattr(src, "signature", None)
+        if callable(getter):
+            for key, val in getter().items():
+                sig[(index, key)] = val
+    return sig
+
+
+def _any_watchable(sources: "List[Any]") -> bool:
+    return any(callable(getattr(src, "signature", None)) for src in sources)
+
 def get_current_source_key():
     """Return the source key of the item currently being processed, if any."""
     return _current_source_key.get()
@@ -98,15 +152,38 @@ async def map(func: Callable, items: Any, *args) -> List[Any]:
 
     return list(await asyncio.gather(*(_call(item) for item in items)))
 
-async def _compute_memo_hash(value: Any) -> str:
+def _logic_fingerprint(func: Callable) -> str:
+    """Stable fingerprint of a transform function's *logic*.
+
+    cocoindex keys its persistent memo on a logic fingerprint so editing a
+    transform's code invalidates stale memos and forces reprocessing. We mirror
+    that by fingerprinting the function source (falling back to bytecode, then
+    to the qualified name) so a change to e.g. chunking or extraction re-runs
+    every source item instead of serving output produced by the old code.
+    """
+    raw = None
+    try:
+        raw = inspect.getsource(func).encode("utf-8")
+    except (OSError, TypeError):
+        code = getattr(func, "__code__", None)
+        if code is not None:
+            raw = code.co_code + repr(code.co_consts).encode("utf-8")
+    if raw is None:
+        raw = f"{getattr(func, '__module__', '')}.{getattr(func, '__qualname__', repr(func))}".encode("utf-8")
+    if _HAVE_COCOINDEX_FP:
+        return _fp_bytes(raw).hex()
+    return hashlib.sha256(raw).hexdigest()
+
+
+async def _compute_memo_hash(value: Any, logic_sig: str = "") -> str:
     """Stable content fingerprint for a source item.
 
     Uses cocoindex.connectorkits.fingerprint.fingerprint_bytes when available
     (same algorithm as the real cocoindex engine) and falls back to SHA-256.
     File-like inputs are hashed by content so any edit changes the fingerprint.
-    The active embedding signature (``POCKET_EMBED_SIG``) is folded in so that
-    switching the embedding model invalidates every memo and forces a clean
-    re-embed at the new vector dimension instead of leaving stale vectors.
+    The active embedding signature (``POCKET_EMBED_SIG``) and the transform
+    ``logic_sig`` are folded in so that switching the embedding model or editing
+    the transform code invalidates every memo and forces a clean reprocess.
     """
     try:
         if getattr(value, "is_image", False) and hasattr(value, "read_bytes"):
@@ -122,9 +199,12 @@ async def _compute_memo_hash(value: Any) -> str:
             payload = repr(value).encode("utf-8")
     except Exception:
         return ""
-    embed_sig = os.getenv("POCKET_EMBED_SIG", "")
-    if embed_sig:
-        payload = embed_sig.encode("utf-8") + b"\x00" + payload
+    # Fold the embedding signature and the transform's logic fingerprint into
+    # the payload so switching the embedding model OR editing the transform code
+    # invalidates every memo and forces a clean reprocess at the new logic/dim.
+    prefixes = [p for p in (logic_sig, os.getenv("POCKET_EMBED_SIG", "")) if p]
+    if prefixes:
+        payload = b"\x00".join(p.encode("utf-8") for p in prefixes) + b"\x00" + payload
     if _HAVE_COCOINDEX_FP:
         return _fp_bytes(payload).hex()
     return hashlib.sha256(payload).hexdigest()
@@ -157,7 +237,17 @@ async def mount_each(func: Callable, items: Any, *args, stats: "UpdateStats" = N
 
     target = _find_target(args)
     memo_enabled = bool(getattr(func, "_memo", False))
+    # Force-rebuild switch (App.update_blocking(full_reprocess=True)): when set,
+    # the memo fast-path below is skipped so every source item re-runs its
+    # transform even if its fingerprint is unchanged.
+    full_reprocess = bool(_FULL_REPROCESS.get())
     seen_keys = set()
+    # Fingerprint the transform's *logic* once per run and fold it into every
+    # memo key below. cocoindex keys its persistent memo on a logic fingerprint
+    # so that editing a transform (e.g. chunking/extraction) invalidates stale
+    # memos and forces reprocessing; without this, an unchanged source file
+    # would keep output produced by the *old* code after a pipeline edit.
+    logic_sig = _logic_fingerprint(func)
 
     if stats is None:
         stats = _ACTIVE_STATS.get() or UpdateStats()
@@ -172,11 +262,11 @@ async def mount_each(func: Callable, items: Any, *args, stats: "UpdateStats" = N
         source_key = str(key)
         seen_keys.add(source_key)
 
-        new_hash = await _compute_memo_hash(value)
+        new_hash = await _compute_memo_hash(value, logic_sig)
         had_prior_state = (
             target is not None and target.get_memo(source_key) is not None
         )
-        if target is not None and memo_enabled and new_hash:
+        if target is not None and memo_enabled and new_hash and not full_reprocess:
             stored_hash = target.get_memo(source_key)
             if stored_hash is not None and stored_hash == new_hash:
                 # Unchanged source: skip all work (incremental fast path).
@@ -230,12 +320,14 @@ class App:
         live: bool = False,
         report_to_stdout: bool = True,
         live_interval: float = 2.0,
+        full_reprocess: bool = False,
     ) -> "UpdateStats":
         return asyncio.run(
             self.run_async(
                 live=live,
                 report_to_stdout=report_to_stdout,
                 live_interval=live_interval,
+                full_reprocess=full_reprocess,
             )
         )
 
@@ -244,6 +336,7 @@ class App:
         live: bool = False,
         report_to_stdout: bool = True,
         live_interval: float = 2.0,
+        full_reprocess: bool = False,
     ) -> "UpdateStats":
         # 1. Run lifespan to set up context
         builder = EnvironmentBuilder()
@@ -265,9 +358,15 @@ class App:
                     _CONTEXT[key_name] = entered_val
                     active_managers.append((val, entered_val))
 
-        async def _run_once() -> "UpdateStats":
+        # Sources scanned by the most recent run; live mode watches these for
+        # change events (W2 push). Refreshed by every _run_once invocation.
+        watched_sources: List[Any] = []
+
+        async def _run_once(force_reprocess: bool = False) -> "UpdateStats":
             stats = UpdateStats()
             _ACTIVE_STATS.set(stats)
+            _FULL_REPROCESS.set(force_reprocess)
+            scan_token = _SCANNED_SOURCES.set([])
             started = time.monotonic()
             try:
                 if inspect.iscoroutinefunction(self.main_func):
@@ -276,6 +375,9 @@ class App:
                     self.main_func(**self.kwargs)
             finally:
                 _ACTIVE_STATS.set(None)
+                _FULL_REPROCESS.set(False)
+                watched_sources[:] = _SCANNED_SOURCES.get() or []
+                _SCANNED_SOURCES.reset(scan_token)
             self.last_stats = stats
             if report_to_stdout:
                 elapsed = time.monotonic() - started
@@ -287,18 +389,35 @@ class App:
 
         try:
             # 2. Run main function (once for catch-up, repeatedly for live mode)
-            stats = await _run_once()
+            # full_reprocess applies to the catch-up pass; subsequent live polls
+            # revert to incremental so we don't re-run everything every interval.
+            stats = await _run_once(force_reprocess=full_reprocess)
             if live:
+                # Push-style live mode: when the scanned sources expose change
+                # signatures, the loop only re-runs the pipeline after an actual
+                # add/edit/delete — idle periods cost just a cheap stat scan
+                # instead of a full re-embedding pass. Sources without a
+                # signature() fall back to the original interval polling so no
+                # change is ever silently missed.
+                watchable = _any_watchable(watched_sources)
+                last_sig = _sources_signature(watched_sources)
                 if report_to_stdout:
+                    mode = "watching for changes" if watchable else "polling"
                     print(
                         f"[pocketindex] entering live mode "
-                        f"(polling every {live_interval:.1f}s; Ctrl+C to stop)",
+                        f"({mode} every {live_interval:.1f}s; Ctrl+C to stop)",
                         flush=True,
                     )
                 try:
                     while True:
                         await asyncio.sleep(live_interval)
+                        if watchable:
+                            current_sig = _sources_signature(watched_sources)
+                            if current_sig == last_sig:
+                                continue  # no change event — stay idle
                         stats = await _run_once()
+                        watchable = _any_watchable(watched_sources)
+                        last_sig = _sources_signature(watched_sources)
                 except (KeyboardInterrupt, asyncio.CancelledError):
                     if report_to_stdout:
                         print("[pocketindex] live mode stopped.", flush=True)

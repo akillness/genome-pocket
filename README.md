@@ -14,7 +14,9 @@ Sequence your knowledge. Carry the whole map in your pocket.
 ## 🖼️ Concept & Architecture
 
 <p align="center">
-  <img src="docs/images/pocket-architecture.svg" alt="Pocket Knowledge Ops architecture: Source → Refine → Transform → Load → Serve, with optional GraphRAG branch and the pocket eval regression harness" width="100%" />
+  <a href="docs/images/pocket-architecture.svg">
+    <img src="docs/images/pocket-architecture.svg" alt="Pocket Knowledge Ops architecture: Source → Refine → Transform → Load → Serve, with optional GraphRAG branch and the pocket eval regression harness" width="100%" />
+  </a>
 </p>
 
 <p align="center"><sub><b>Figure 1.</b> The full <code>Target = F(Source)</code> pipeline — five incremental stages, the three serve surfaces (CLI / MCP / REST + Web UI), the optional knowledge-graph branch, and the <code>pocket eval</code> regression harness that scores the same retrieval path.</sub></p>
@@ -24,7 +26,9 @@ Pocket operates on the core mental model of **Target = F(Source)**. All data pro
 ### Data flow at a glance
 
 <p align="center">
-  <img src="docs/images/pipeline-flow.svg" alt="genome-pocket pipeline flow: Source → Refine → Transform → Load → Serve, with SemanticSplitter ⚡, HyDE ⚡, Cross-encoder Reranker ⚡, LLM Judge ⚡, Schema JSON ⚡" width="100%" />
+  <a href="docs/images/pipeline-flow.svg">
+    <img src="docs/images/pipeline-flow.svg" alt="genome-pocket pipeline flow: Source → Refine → Transform → Load → Serve, with SemanticSplitter ⚡, HyDE ⚡, Cross-encoder Reranker ⚡, LLM Judge ⚡, Schema JSON ⚡" width="100%" />
+  </a>
 </p>
 
 
@@ -38,7 +42,8 @@ Pocket operates on the core mental model of **Target = F(Source)**. All data pro
    - Generates stable, deterministic IDs using `IdGenerator` to ensure lineage and idempotency.
 4. **Load (SQLite + sqlite-vec + FTS5):** Stores chunk text, embeddings, and lineage metadata (file path, start/end offsets) in a local SQLite database. The same load mirrors chunk text into an FTS5 index so the target supports both vector and lexical (BM25) search.
 5. **Serve (hybrid retrieval):** A single retrieval layer (`pocket/retrieval.py`) fuses vector + lexical results via Reciprocal Rank Fusion and is exposed three ways:
-   - **CLI:** `pocket search "query" --mode hybrid|vector|lexical`
+   - **CLI:** `pocket search "query" --mode auto|hybrid|vector|lexical|graph` (`auto` = the POCKET-504 semantic router: pick the mode from the query's shape)
+
    - **MCP Server:** `pocket-mcp` for Claude Code / Cursor.
    - **REST API Server:** `pocket serve` / `pocket-api` (Starlette + uvicorn) with `/health`, `/search`, `/lineage`, `/trace`, and a built-in **Web UI** at `/` that visualizes query routing and chunk lineage.
 6. **Knowledge Graph (optional, GraphRAG):** An opt-in branch (`pocket update --graph`) extracts entities/relations into graph tables using a local extractor (`deterministic` default, or `ollama`/`airllm`), reusing the same incremental lineage/memoization/deletion sweep. Query a neighborhood with `pocket graph "<entity>"`.
@@ -147,6 +152,17 @@ POCKET_QUERY_EXPANSION=0
 # POCKET_QUERY_EXPANSION_FILE=synonyms.json
 # POCKET_RRF_WEIGHTS_FILE=tuned.json
 
+# --- Optional: semantic query router (POCKET-504) ---
+# Off by default. `pocket search --mode auto` (or /search?mode=auto) always picks
+# the retrieval mode from the query's shape: code-like queries (snake_case /
+# camelCase identifiers, foo() calls, ::scopes, filename.ext, backtick spans) ->
+# lexical exact-match; relationship questions ("how does X relate to Y") -> graph
+# multi-hop; everything else -> hybrid. Setting POCKET_QUERY_ROUTER=1 also
+# auto-routes a plain `hybrid` call, so existing callers get the right blend with
+# no call-site change. Deterministic and offline (regex/keyword shape, no model).
+POCKET_QUERY_ROUTER=0
+
+
 # --- Optional: 2026 SOTA improvements ---
 # All features are OFF by default; existing behaviour is fully preserved.
 
@@ -222,6 +238,8 @@ pocket search "embeddings" --rerank           # cross-encoder precision pass aft
 pocket search "embeddings" --hyde             # HyDE query expansion via Ollama (POCKET-602)
 pocket search "embeddings" --rerank --hyde    # stack both for maximum recall+precision
 pocket search "wal durability" --expand       # deterministic synonym/acronym expansion (POCKET-503; offline)
+pocket search "parse_payload validation" --mode auto   # semantic router picks the mode from query shape (POCKET-504)
+
 ```
 
 The `--json` flag emits `{query, mode, count, hits[]}` (each hit with full
@@ -273,6 +291,8 @@ pocket eval --tune --tune-method coordinate    # cheaper coordinate-ascent searc
 pocket eval --with-judge                       # add LLM-as-judge Faithfulness + Relevance scores (POCKET-604)
 pocket eval --with-judge --judge-model qwen3:8b  # use a specific Ollama model as judge
 pocket eval --cases gold.json --expand         # measure the query-expansion recall lift (POCKET-503)
+pocket eval --cases gold.json                  # cases with mode="auto" exercise the semantic router (POCKET-504)
+
 ```
 
 With `--tune` the harness becomes an **optimizer** (POCKET-502): it searches
@@ -301,9 +321,10 @@ files contributed** to the fused result, with per-file chunk lineage on demand.
 Endpoints:
 - `GET /` — query-tracing & lineage Web UI.
 - `GET /health` — liveness and index status.
-- `GET /search?q=<query>&limit=5&mode=hybrid` — retrieval via query string.
+- `GET /search?q=<query>&limit=5&mode=hybrid` — retrieval via query string (`mode` accepts `auto`/`hybrid`/`vector`/`lexical`/`graph`; `auto` engages the POCKET-504 router).
 - `POST /search` — JSON body `{"query": "...", "limit": 5, "mode": "hybrid"}`.
-- `GET /trace?q=<query>&mode=hybrid&limit=5` — routing trace (active/available strategies, candidate counts, per-hit contributors).
+- `GET /trace?q=<query>&mode=hybrid&limit=5` — routing trace (active/available strategies, candidate counts, per-hit contributors); `mode=auto` reports the routed mode.
+
 - `GET /lineage?file_path=<path>` — ordered chunk lineage for a source file.
 
 ```bash
@@ -406,14 +427,17 @@ To connect Claude Code or Cursor to your Pocket knowledge base, add the followin
 ## 🗺️ Roadmap
 
 <p align="center">
-  <img src="docs/images/roadmap.svg" alt="genome-pocket roadmap: cocoindex migration phases P0–P6 and 2026 SOTA improvements POCKET-601 through POCKET-607" width="100%" />
+  <a href="docs/images/roadmap.svg">
+    <img src="docs/images/roadmap.svg" alt="genome-pocket roadmap: cocoindex migration phases P0–P6 and 2026 SOTA improvements POCKET-601 through POCKET-607" width="100%" />
+  </a>
 </p>
 
 Genome-pocket is evolving toward full adoption of the `cocoindex` runtime. The phased plan (full details in [`docs/architecture/cocoindex-gap.md`](docs/architecture/cocoindex-gap.md)):
 
 | Phase | What | Status |
 |-------|------|--------|
-| P0 | **Test infra** — `MockEmbedder` session patch; the whole suite (now 146 tests) runs offline in < 10 s via `bash run_tests.sh` | ✅ done |
+| P0 | **Test infra** — `MockEmbedder` session patch; the whole suite (now 153 tests) runs offline in < 10 s via `bash run_tests.sh` | ✅ done |
+
 
 | P1 | **Content fingerprinting** — `cocoindex.connectorkits.fingerprint` replaces SHA-256 in `_compute_memo_hash`; unchanged files skip re-index | ✅ done |
 | P2 | **Concurrent `map()`** — `asyncio.gather` replaces sequential loop; matches real cocoindex contract | ✅ done |

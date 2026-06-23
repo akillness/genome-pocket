@@ -105,10 +105,7 @@ def drop_source(file_path: str, db_path: Optional[Path] = None) -> Dict:
             conn.executemany(
                 f"DELETE FROM {fts} WHERE row_id = ?", [(i,) for i in ids]
             )
-        # Lineage/memo are keyed by the engine's source_key (the relative path
-        # walk_dir emits), which differs from the absolute file_path stored on
-        # each row. Resolve the affected source_keys from the lineage table via
-        # the row ids we just removed instead of assuming the two keys match.
+        # source_key (engine relative path) ≠ file_path (absolute); resolve via lineage table
         lineage = f"_pocket_lineage_{_TARGET_TABLE}"
         memo = f"_pocket_memo_{_TARGET_TABLE}"
         if _table_exists(conn, lineage):
@@ -163,10 +160,7 @@ def _count(conn: sqlite3.Connection) -> tuple:
     return sources, chunks
 
 
-# --- Human-in-the-loop graph review (POCKET-302) ---------------------------
-# Low-confidence facts (below POCKET_GRAPH_MIN_CONFIDENCE) are written with
-# status="pending" instead of being committed. Retrieval ignores them until a
-# human accepts them here, via `pocket graph review`.
+# POCKET-302 HITL graph review — pending facts (below POCKET_GRAPH_MIN_CONFIDENCE) held until `pocket graph review`
 
 _ENTITIES = "entities"
 _RELATIONS = "relations"

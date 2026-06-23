@@ -16,6 +16,7 @@ agent can cite the exact source bytes, matching pocketindex's end-to-end lineage
 guarantee.
 """
 import json
+import re
 import sqlite3
 from dataclasses import dataclass, asdict
 from functools import lru_cache
@@ -147,6 +148,41 @@ def _lexical_search(conn: sqlite3.Connection, query: str, limit: int) -> List[tu
         return cur.fetchall()
     except sqlite3.OperationalError:
         return []
+        return []
+
+
+_QUERY_TOKEN_RE = re.compile(r"[A-Za-z0-9_]+")
+
+
+def _expand_query(query: str, synonyms: Dict[str, List[str]]) -> str:
+    """Append synonym / acronym expansion terms to a query (POCKET-503).
+
+    For each lowercased query token present in ``synonyms``, append every word of
+    its expansion phrase(s) that is not already in the query. Order is preserved
+    and tokens are de-duplicated, so the result is deterministic. Returns the
+    query unchanged when ``synonyms`` is empty or nothing matches — making the
+    default (expansion off / empty map) a strict no-op.
+
+    Why append rather than replace: the original tokens still carry signal (BM25
+    rank, vector mass), so expansion only *adds* recall. Only the bare-word
+    expansion of acronyms is added, never paraphrase soup, keeping the change
+    small and predictable.
+    """
+    if not synonyms:
+        return query
+    present = {t.lower() for t in _QUERY_TOKEN_RE.findall(query)}
+    extra: List[str] = []
+    for tok in _QUERY_TOKEN_RE.findall(query.lower()):
+        for phrase in synonyms.get(tok, ()):  # type: ignore[arg-type]
+            for word in _QUERY_TOKEN_RE.findall(phrase.lower()):
+                if word not in present:
+                    present.add(word)
+                    extra.append(word)
+    if not extra:
+        return query
+    return f"{query} {' '.join(extra)}"
+
+
 
 # Which strategies each retrieval mode activates. Single source of truth for the
 # router so the CLI, REST API, and tracing UI agree on what "hybrid" means.
@@ -156,6 +192,82 @@ _MODE_STRATEGIES = {
     "lexical": ("lexical",),
     "graph": ("graph",),
 }
+
+
+# POCKET-504 semantic query router — deterministic, offline; see config.POCKET_QUERY_ROUTER
+
+# Conservative: only unambiguous code shapes — a false "lexical" route drops vector strategy
+_CODE_SHAPE_RE = re.compile(
+    r"""
+      \b[A-Za-z][A-Za-z0-9]*_[A-Za-z0-9_]*\b   # snake_case identifier (parse_payload)
+    | \b[a-z]+[A-Z][A-Za-z0-9]*\b              # camelCase identifier (parsePayload)
+    | \b[A-Za-z_][A-Za-z0-9_]*\s*\(            # function/method call: foo(
+    | ::[A-Za-z_]                              # C++/Rust scope: ns::sym
+    | \b[A-Za-z_][A-Za-z0-9_]*\.(py|js|ts|tsx|jsx|go|rs|rb|java|c|cpp|h|hpp|sql|sh|md|json|yaml|yml|toml)\b  # filename.ext
+    | [{}\[\];]                                # code punctuation
+    | `[^`]+`                                  # an explicit `code span`
+    """,
+    re.VERBOSE,
+)
+
+# Concept/relationship phrasings → graph multi-hop; flat vector/lexical answers them poorly
+_CONCEPT_PHRASES = (
+    "related to",
+    "relationship between",
+    "relation between",
+    "connection between",
+    "connected to",
+    "linked to",
+    "links between",
+    "associated with",
+    "depends on",
+    "depend on",
+    "dependency between",
+    "how does",
+    "how do",
+    "impact of",
+    "interact with",
+    "interaction between",
+    "difference between",
+)
+
+
+def _route_query(query: str) -> str:
+    """Classify a query's shape into a concrete retrieval mode (POCKET-504).
+
+    Returns one of ``"lexical"``, ``"graph"``, or ``"hybrid"``. Pure and
+    deterministic (regex + keyword shape only, no I/O) so it is unit-testable and
+    its routing decision is reproducible.
+
+    Priority: relationship/concept phrasing → ``graph`` first, because a question
+    like *"how does write_ahead_log relate to recovery"* is a relationship query
+    even though it embeds a code token; then unambiguous code shape → ``lexical``;
+    otherwise the ``hybrid`` blend, which is the safe default for prose.
+    """
+    text = query.strip()
+    lowered = text.lower()
+    if any(phrase in lowered for phrase in _CONCEPT_PHRASES):
+        return "graph"
+    if _CODE_SHAPE_RE.search(text):
+        return "lexical"
+    return "hybrid"
+
+
+def _resolve_mode(query: str, mode: str, conn: sqlite3.Connection) -> str:
+    """Resolve ``mode`` to a concrete strategy, applying the router (POCKET-504).
+
+    ``"auto"`` always routes; a plain ``"hybrid"`` routes only when
+    ``config.POCKET_QUERY_ROUTER`` is enabled (opt-in upgrade for existing
+    hybrid callers). Any other mode is returned unchanged. A routed ``"graph"``
+    falls back to ``"hybrid"`` when the target has no graph tables, so routing
+    can never silently return zero results on a graph-less database.
+    """
+    if mode == "auto" or (mode == "hybrid" and config.POCKET_QUERY_ROUTER):
+        routed = _route_query(query)
+        if routed == "graph" and not _graph_available(conn):
+            return "hybrid"
+        return routed
+    return mode
 
 
 def _gather(
@@ -177,11 +289,7 @@ def _gather(
     lexical_rows: List[tuple] = []
     graph_rows: List[tuple] = []
 
-    # Both vector search and graph entity-anchoring need the query embedding.
-    # When HyDE is active the caller passes a hypothetical document as
-    # ``hyde_query``; we embed that instead of the raw query for vector/graph
-    # so the query vector lands closer to real document chunks in index space.
-    # Lexical (BM25) search always uses the original ``query`` keyword string.
+    # HyDE: embed hypothetical doc (hyde_query) instead of raw query; lexical always uses raw query
     query_vector = None
     if mode in ("hybrid", "vector", "graph"):
         model = _get_model(model_name)
@@ -212,14 +320,20 @@ def search(
     weights: Optional[Dict[str, float]] = None,
     use_reranker: Optional[bool] = None,
     use_hyde: Optional[bool] = None,
+    use_expansion: Optional[bool] = None,
 ) -> List[RetrievalHit]:
     """Run retrieval and return ranked, lineage-tagged hits.
 
     ``mode`` is one of ``"hybrid"`` (vector + lexical + graph via RRF),
-    ``"vector"`` (semantic only), ``"lexical"`` (keyword/BM25 only), or
-    ``"graph"`` (GraphRAG: entity-anchored multi-hop traversal). The graph
-    strategy only participates when an ``entities`` table is present, so
-    ``"hybrid"`` stays backward compatible on graph-less databases.
+    ``"vector"`` (semantic only), ``"lexical"`` (keyword/BM25 only),
+    ``"graph"`` (GraphRAG: entity-anchored multi-hop traversal), or ``"auto"``
+    (POCKET-504: the semantic router picks a concrete mode from the query's
+    shape — code-like queries route to lexical, relationship questions to graph,
+    otherwise hybrid). A plain ``"hybrid"`` is auto-routed too when
+    ``config.POCKET_QUERY_ROUTER`` is enabled. The graph strategy only
+    participates when an ``entities`` table is present, so ``"hybrid"`` stays
+    backward compatible on graph-less databases.
+
 
     ``weights`` scales each strategy's RRF contribution (POCKET-502); ``None``
     uses ``config.POCKET_RRF_WEIGHTS`` (1.0 each == plain unweighted RRF).
@@ -233,6 +347,13 @@ def search(
     first expanded by a local Ollama model into a hypothetical answer passage
     which is used for vector/graph embedding instead of the raw query string.
     Lexical (BM25) search is always run on the original query.
+
+    When ``use_expansion`` is true (defaults to ``config.POCKET_QUERY_EXPANSION``)
+    the query is first augmented with deterministic synonym/acronym expansion
+    terms from ``config.POCKET_QUERY_EXPANSION_MAP`` (POCKET-503), helping both the
+    lexical index and the embedding match documents that only spell out the long
+    form of an abbreviation. This runs before HyDE; when HyDE is also active its
+    generated passage still takes precedence for the vector/graph embedding.
 
     When ``use_reranker`` is true (defaults to ``config.POCKET_RERANKER``) the
     top ``POCKET_RERANKER_TOP_N`` fused candidates are re-scored by a
@@ -248,8 +369,17 @@ def search(
         use_reranker = config.POCKET_RERANKER
     if use_hyde is None:
         use_hyde = config.POCKET_HYDE
+    if use_expansion is None:
+        use_expansion = config.POCKET_QUERY_EXPANSION
     if not Path(db_path).exists():
         return []
+
+    # Query expansion (POCKET-503): augment the query with synonym/acronym terms
+    # so vector + lexical both see the long form of an abbreviation. The original
+    # query is kept for HyDE generation and the reranker (raw user intent).
+    gather_query = query
+    if use_expansion:
+        gather_query = _expand_query(query, config.POCKET_QUERY_EXPANSION_MAP)
 
     # HyDE: expand the query into a hypothetical passage for vector/graph encoding.
     # Lexical (BM25) always uses the original query keywords.
@@ -268,8 +398,11 @@ def search(
 
     conn = _connect(Path(db_path))
     try:
+        # POCKET-504: resolve "auto"/opt-in hybrid to a concrete mode; after connect so graph can fall back
+        mode = _resolve_mode(query, mode, conn)
+
         vector_rows, lexical_rows, graph_rows = _gather(
-            conn, query, mode, fetch_n, model_name, hyde_query=hyde_query
+            conn, gather_query, mode, fetch_n, model_name, hyde_query=hyde_query
         )
 
         if use_mmr:
@@ -606,9 +739,15 @@ def routing_trace(
             "lexical": _fts_available(conn),
             "graph": _graph_available(conn),
         }
+        # Apply the semantic router (POCKET-504) so the trace mirrors what a real
+        # search would do, then recompute which strategies the routed mode
+        # activates. ``active`` is read by the _strategies() closure below.
+        mode = _resolve_mode(query, mode, conn)
+        active = set(_MODE_STRATEGIES.get(mode, ()))
         vector_rows, lexical_rows, graph_rows = _gather(
             conn, query, mode, fetch_n, model_name
         )
+
     finally:
         conn.close()
 

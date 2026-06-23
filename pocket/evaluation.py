@@ -323,6 +323,7 @@ def evaluate(
     weights: Optional[Dict[str, float]] = None,
     use_mmr: Optional[bool] = None,
     mmr_lambda: Optional[float] = None,
+    use_expansion: Optional[bool] = None,
 ) -> EvalMetrics:
     """Run every case through real retrieval and aggregate the scores.
 
@@ -340,6 +341,10 @@ def evaluate(
     cases with and without Maximal Marginal Relevance re-ranking and read the
     Recall@k/MAP delta — instead of only toggling it through global config.
     ``None`` (the default) follows ``config.POCKET_MMR`` / ``POCKET_MMR_LAMBDA``.
+
+    ``use_expansion`` is forwarded the same way so the harness can measure the
+    query-expansion recall lift (POCKET-503); ``None`` follows
+    ``config.POCKET_QUERY_EXPANSION``.
     """
     db_path = Path(db_path or config.POCKET_SQLITE_DB)
     results: List[CaseResult] = []
@@ -353,6 +358,7 @@ def evaluate(
             weights=weights,
             use_mmr=use_mmr,
             mmr_lambda=mmr_lambda,
+            use_expansion=use_expansion,
         )
 
 
@@ -460,10 +466,7 @@ def format_report(metrics: EvalMetrics, show_cases: bool = False) -> str:
 
 # --- Weighted-RRF tuning (POCKET-502) --------------------------------------
 
-# Default candidate weights to grid-search per strategy. 0.0 lets the optimizer
-# drop a strategy entirely; 1.0 (always probed) reproduces plain RRF, so the
-# baseline is always inside the grid and the tuner can never pick something
-# worse than the equal-weight default.
+# 0.0=drop strategy, 1.0=plain RRF baseline — grid always includes equal-weight so tuner can't regress
 DEFAULT_WEIGHT_GRID = (0.0, 0.5, 1.0, 2.0)
 
 _STRATEGY_ORDER = ("vector", "lexical", "graph")
@@ -513,34 +516,13 @@ def _deviation(weights: Dict[str, float]) -> float:
     return sum(abs(weights[s] - 1.0) for s in _STRATEGY_ORDER)
 
 
-def tune_weights(
-    cases: List[EvalCase],
-    db_path: Optional[Path] = None,
-    k: int = 5,
-    model_name: Optional[str] = None,
-    values=DEFAULT_WEIGHT_GRID,
-    metric: str = "mean_average_precision",
-) -> TuningResult:
-    """Grid-search per-strategy RRF weights, returning the best (POCKET-502).
+def _clean_values(values) -> List[float]:
+    """Clamp candidates to non-negative, dedupe (order-preserving), pin 1.0.
 
-    Turns the eval harness from a guard into an optimizer: every weight
-    combination is scored with the *same* real retrieval path :func:`evaluate`
-    uses, and the combination maximising ``metric`` is returned alongside the
-    equal-weight baseline so the caller can see the lift before persisting it.
-
-    Only strategies actually exercised by the cases' modes are varied (others
-    are pinned to 1.0), so a lexical-only suite searches a 1-D grid instead of a
-    wasteful 3-D one. ``1.0`` is always probed, so the result is never worse than
-    plain RRF. Ties are broken toward the baseline (smallest weight deviation),
-    keeping the recommendation conservative.
+    Guaranteeing ``1.0`` is present means the equal-weight baseline is always a
+    reachable point, so neither search method can recommend something worse than
+    plain RRF.
     """
-    if metric not in METRIC_NAMES:
-        raise ValueError(
-            f"metric must be one of {METRIC_NAMES}, got {metric!r}"
-        )
-
-    # Clean the grid: clamp to non-negative, dedupe (order-preserving), and
-    # guarantee 1.0 is present so the baseline point exists.
     vals: List[float] = []
     for v in values:
         fv = max(float(v), 0.0)
@@ -548,39 +530,116 @@ def tune_weights(
             vals.append(fv)
     if 1.0 not in vals:
         vals.append(1.0)
+    return vals
 
-    # Which strategies are worth varying for this case set?
-    tuned = [
+
+def _tuned_strategies(cases: List["EvalCase"]) -> List[str]:
+    """Strategies actually exercised by the cases' modes (others stay at 1.0)."""
+    return [
         s
         for s in _STRATEGY_ORDER
         if any(s in retrieval._MODE_STRATEGIES.get(c.mode, ()) for c in cases)
     ]
 
-    baseline_score = getattr(
-        evaluate(cases, db_path=db_path, k=k, model_name=model_name,
-                 weights=dict(_EQUAL_WEIGHTS)),
-        metric,
-    )
 
+def tune_weights(
+    cases: List[EvalCase],
+    db_path: Optional[Path] = None,
+    k: int = 5,
+    model_name: Optional[str] = None,
+    values=DEFAULT_WEIGHT_GRID,
+    metric: str = "mean_average_precision",
+    method: str = "grid",
+    max_passes: int = 3,
+) -> TuningResult:
+    """Search per-strategy RRF weights, returning the best (POCKET-502).
+
+    Turns the eval harness from a guard into an optimizer: every weight
+    combination is scored with the *same* real retrieval path :func:`evaluate`
+    uses, and the combination maximising ``metric`` is returned alongside the
+    equal-weight baseline so the caller can see the lift before persisting it.
+
+    Only strategies actually exercised by the cases' modes are varied (others
+    are pinned to 1.0), so a lexical-only suite searches a 1-D space instead of a
+    wasteful 3-D one. ``1.0`` is always probed, so the result is never worse than
+    plain RRF. Ties are broken toward the baseline (smallest weight deviation),
+    keeping the recommendation conservative.
+
+    ``method`` selects the search strategy:
+
+    * ``"grid"`` (default) — exhaustive Cartesian product of ``values`` over the
+      tuned strategies. Thorough but ``len(values) ** len(tuned)`` evaluations.
+    * ``"coordinate"`` — coordinate ascent: optimize one strategy at a time,
+      holding the others fixed, sweeping ``values`` for each, and repeat full
+      passes (up to ``max_passes``) until a pass yields no improvement. Far
+      cheaper on 2–3 tuned strategies, and identical results when the metric
+      surface is separable. Re-scored points are memoized so revisits are free.
+    """
+    if metric not in METRIC_NAMES:
+        raise ValueError(
+            f"metric must be one of {METRIC_NAMES}, got {metric!r}"
+        )
+    if method not in ("grid", "coordinate"):
+        raise ValueError(
+            f"method must be 'grid' or 'coordinate', got {method!r}"
+        )
+
+    vals = _clean_values(values)
+    tuned = _tuned_strategies(cases)
+
+    # Memoized scorer over the real retrieval path. Keyed on the rounded weight
+    # tuple so grid revisits and coordinate-ascent backtracking are free.
     trials: List[WeightTrial] = []
-    best_weights = dict(_EQUAL_WEIGHTS)
-    best_score = baseline_score
-    best_dev = 0.0
-    for combo in itertools.product(vals, repeat=len(tuned)):
-        weights = dict(_EQUAL_WEIGHTS)
-        weights.update(dict(zip(tuned, combo)))
-        if weights == _EQUAL_WEIGHTS:
-            score = baseline_score  # already measured; don't pay for it twice
-        else:
-            score = getattr(
+    _cache: Dict[Tuple[float, ...], float] = {}
+
+    def score_of(weights: Dict[str, float]) -> float:
+        key = tuple(round(weights[s], 6) for s in _STRATEGY_ORDER)
+        if key not in _cache:
+            _cache[key] = getattr(
                 evaluate(cases, db_path=db_path, k=k, model_name=model_name,
                          weights=weights),
                 metric,
             )
-        trials.append(WeightTrial(weights=dict(weights), score=score))
+            trials.append(WeightTrial(weights=dict(weights), score=_cache[key]))
+        return _cache[key]
+
+    baseline_score = score_of(dict(_EQUAL_WEIGHTS))
+
+    best_weights = dict(_EQUAL_WEIGHTS)
+    best_score = baseline_score
+    best_dev = 0.0
+
+    def consider(weights: Dict[str, float]) -> None:
+        nonlocal best_score, best_weights, best_dev
+        score = score_of(weights)
         dev = _deviation(weights)
         if score > best_score or (score == best_score and dev < best_dev):
             best_score, best_weights, best_dev = score, dict(weights), dev
+
+    if method == "grid":
+        for combo in itertools.product(vals, repeat=len(tuned)):
+            weights = dict(_EQUAL_WEIGHTS)
+            weights.update(dict(zip(tuned, combo)))
+            consider(weights)
+    else:  # coordinate ascent
+        current = dict(_EQUAL_WEIGHTS)
+        for _ in range(max(1, max_passes)):
+            improved_this_pass = False
+            for strategy in tuned:
+                anchor_score = best_score
+                anchor_dev = best_dev
+                for v in vals:
+                    trial = dict(best_weights)
+                    trial[strategy] = v
+                    consider(trial)
+                # Lock this strategy at the current best before moving on.
+                current = dict(best_weights)
+                if best_score > anchor_score or (
+                    best_score == anchor_score and best_dev < anchor_dev
+                ):
+                    improved_this_pass = True
+            if not improved_this_pass:
+                break
 
     return TuningResult(
         metric=metric,

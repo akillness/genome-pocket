@@ -1,8 +1,17 @@
+# Python
 .venv/
-.pocket/
 __pycache__/
 *.pyc
-.env
-.jeo/
- append EOF
 *.egg-info/
+
+# Secrets / local env
+.env
+
+# Hidden folders (anything starting with '.') — never push
+# Covers runtime/tool dirs like .omx/, .jeo/, .pocket/, .pytest_cache/, .survey/, etc.
+.*/
+
+# Exceptions: keep these tracked
+!.gitignore
+# .survey holds committed research output — keep it versioned
+!.survey/

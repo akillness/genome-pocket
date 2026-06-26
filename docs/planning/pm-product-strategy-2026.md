@@ -90,30 +90,29 @@ the riskiest assumptions below.
 ## 5. Opportunity Solution Tree (Teresa Torres)
 
 
-OUTCOME: increase "grounded retrievals per active week"
-│
-├─ O1 · Results don't surface the right/diverse passages
-│     ├─ POCKET-501 MMR diversity in _fuse           (backlog, measurable)
-│     ├─ POCKET-502 weighted/tunable RRF             (backlog, measurable)
-│     └─ POCKET-504 semantic query router            (backlog)
-│
-├─ O2 · Users get chunks, not a trustworthy answer   ← highest user-value gap
-│     ├─ POCKET-506 answer synthesis with citations  (backlog) ★ PRD below
-│     └─ POCKET-507 snippet highlighting             (backlog)
-│
-├─ O3 · The agent (Ada) can't consume Pocket cleanly
-│     ├─ pocket search --json                        ✅ shipped this cycle
-│     └─ richer MCP tool surface (graph, lineage)    (candidate)
-│
-├─ O4 · Index goes stale / bloats on edits
-│     ├─ POCKET-P4 state-diff delta writes           ✅ shipped this cycle
-│     ├─ POCKET-P5 logic-fingerprint memo            ✅ shipped this cycle
-│     ├─ POCKET-P6 full_reprocess force-rebuild      ✅ shipped this cycle
-│     └─ POCKET-W2 push-style live mode              ✅ shipped this cycle
-│
-└─ O5 · New users can't tell if it's working (onboarding)
-      ├─ "pocket doctor" health/first-run check      (candidate)
-      └─ HITL queue visible in Web UI (POCKET-505)   (backlog)
+```mermaid
+flowchart TD
+    OUT["OUTCOME: increase<br/>grounded retrievals per active week"]
+    OUT --> O1["O1 · Results don't surface<br/>the right/diverse passages"]
+    OUT --> O2["O2 · Users get chunks,<br/>not a trustworthy answer<br/>← highest user-value gap"]
+    OUT --> O3["O3 · The agent (Ada)<br/>can't consume Pocket cleanly"]
+    OUT --> O4["O4 · Index goes stale /<br/>bloats on edits"]
+    OUT --> O5["O5 · New users can't tell<br/>if it's working (onboarding)"]
+    O1 --> O1a["POCKET-501 MMR diversity (backlog)"]
+    O1 --> O1b["POCKET-502 weighted/tunable RRF (backlog)"]
+    O1 --> O1c["POCKET-504 semantic query router (backlog)"]
+    O2 --> O2a["POCKET-506 answer synthesis w/ citations ★ PRD below"]
+    O2 --> O2b["POCKET-507 snippet highlighting (backlog)"]
+    O3 --> O3a["pocket search --json ✅ shipped this cycle"]
+    O3 --> O3b["richer MCP tool surface (candidate)"]
+    O4 --> O4a["POCKET-P4 state-diff delta writes ✅ shipped"]
+    O4 --> O4b["POCKET-P5 logic-fingerprint memo ✅ shipped"]
+    O4 --> O4c["POCKET-P6 full_reprocess rebuild ✅ shipped"]
+    O4 --> O4d["POCKET-W2 push-style live mode ✅ shipped"]
+    O5 --> O5a["pocket doctor health/first-run check (candidate)"]
+    O5 --> O5b["HITL queue visible in Web UI (POCKET-505)"]
+```
+
 
 
 The tree shows the engineering backlog is well-stocked under O1/O4 but **O2 and

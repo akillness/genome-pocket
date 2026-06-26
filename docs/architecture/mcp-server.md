@@ -8,18 +8,19 @@ This document describes how **Pocket** exposes its personal knowledge base to AI
 
 Pocket runs a local MCP server that communicates with the host agent via standard input/output (stdio) or SSE (Server-Sent Events).
 
+```mermaid
+flowchart LR
+    C["Claude Code / Cursor /<br/>AI Agent client"] -->|"MCP protocol (stdio / SSE)"| S["Pocket MCP Server<br/>pocket-mcp"]
+    S --> R["Pocket Runtime<br/>retrieval.search + admin"]
+    R --> DB["SQLite + sqlite-vec + FTS5<br/>+ entities/relations"]
 ```
-┌──────────────────┐               ┌──────────────────┐
-│  Claude Code /   │  MCP Protocol │  Pocket MCP      │
-│  Cursor Client   ├──────────────>│  Server          │
-└──────────────────┘    (stdio)    └────────┬─────────┘
-                                            │
-                                            ▼
-                                   ┌──────────────────┐
-                                   │  Pocket Runtime  │
-                                   │  (SQLite/Lance)  │
-                                   └──────────────────┘
-```
+
+| Tool | Purpose | Backing call |
+|------|---------|--------------|
+| `search_knowledge` | hybrid retrieval over notes/code | `retrieval.search` |
+| `get_file_lineage` | indexing history for a file | lineage tables |
+| `list_concepts` | browse the knowledge graph | `retrieval.list_graph_concepts` (`POCKET_GRAPH=1`) |
+
 
 ---
 
@@ -57,7 +58,8 @@ To configure Claude Code or Cursor to use the Pocket MCP server, add the followi
   "mcpServers": {
     "pocket": {
       "command": "uv",
-      "args": ["run", "--package", "pocket", "pocket-mcp"]
+      "args": ["run", "--package", "genome-pocket", "pocket-mcp"]
+
     }
   }
 }

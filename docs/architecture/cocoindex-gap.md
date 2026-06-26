@@ -89,18 +89,18 @@ correctness bugs and block several planned features.
 
 ## 6. Priority order
 
-```
-P0  T1-T3   MockEmbedder — DONE (unblocked all other work)
-P1  C1      Fingerprinting — DONE (biggest correctness win)
-P2  C2      State-diff delta writes — DONE (orphan sweep + per-row statediff skip)
-P3  W1      list_concepts MCP — DONE (live graph query, POCKET_GRAPH guard)
-P4  C3      map() concurrency — DONE (asyncio.gather fan-out)
-P5  C4      fn(memo=True) logic-fingerprint keying — DONE (memo already persistent; logic fp folded in)
-P5  C4      fn(memo=True) logic-fingerprint keying — DONE (memo already persistent; logic fp folded in)
-P6  C5      full_reprocess flag — DONE (force a clean rebuild on demand; --full-reprocess)
-P7  W2      Live mode push — DONE (change-driven via source signatures; idle costs only a stat scan)
-P8  Phase4  Native cocoindex migration — defer until the gaps above are green
-```
+| Order | Gap | Item | Status |
+|-------|-----|------|--------|
+| P0 | T1–T3 | MockEmbedder | ✅ done — unblocked all other work |
+| P1 | C1 | Content fingerprinting | ✅ done — biggest correctness win |
+| P2 | C2 | State-diff delta writes | ✅ done — orphan sweep + per-row statediff skip |
+| P3 | W1 | `list_concepts` MCP | ✅ done — live graph query, `POCKET_GRAPH` guard |
+| P4 | C3 | `map()` concurrency | ✅ done — `asyncio.gather` fan-out |
+| P5 | C4 | `fn(memo=True)` logic-fingerprint keying | ✅ done — memo persistent; logic fp folded in |
+| P6 | C5 | `full_reprocess` flag | ✅ done — clean rebuild on demand (`--full-reprocess`) |
+| P7 | W2 | Live-mode push | ✅ done — change-driven via source signatures (idle = stat scan) |
+| P8 | Phase 4 | Native cocoindex migration | 🚧 in progress — `pocket/pipeline_native.py` PoC |
+
 
 ---
 

@@ -9,7 +9,8 @@ so the next loop can pick one up, freeze a seed, and verify it against
 ## Snapshot of what already exists (verified)
 
 `genome-pocket` is well past prototype. Confirmed by reading the source and
-running the suite (`bash run_tests.sh` → **91 tests pass offline in ~5 s**):
+running the suite (`bash run_tests.sh` → **169 tests pass offline in ~11 s**):
+
 
 - **Incremental ETL** — `Target = F(Source)`, Δ-only, lineage + memo + deletion
   sweep (`pocketindex/`, `pocket/pipeline.py`).

@@ -6,43 +6,32 @@ This document describes the high-level architecture of **Pocket** and how it imp
 
 ## High-Level Architecture
 
-Pocket is structured into four main layers, running entirely on the user's local machine:
+Pocket is structured into five layers, running entirely on the user's local machine:
+
+
+```mermaid
+flowchart TD
+    S["Sources<br/>Markdown notes · codebases · images · PDFs"]
+    E["DNA Core — Incremental ETL Engine<br/>Target = F(Source) · Δ-only via memo=True · end-to-end lineage"]
+    T["Target Stores<br/>SQLite + sqlite-vec · FTS5 (BM25) · entities/relations graph tables"]
+    R["Retrieval Layer<br/>lexical + semantic + graph · semantic router · query expansion · RRF + MMR"]
+    SV["Serve Surfaces<br/>CLI · MCP server · REST API + Web UI"]
+    S -->|LocalFS connector| E
+    E -->|"chunking & embedding"| T
+    T -->|hybrid retrieval| R
+    R -->|"CLI / MCP / REST"| SV
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                           Sources                               │
-│         (Markdown Notes, Codebases, PDFs, Bookmarks)            │
-└────────────────────────────────┬────────────────────────────────┘
-                                 │ LocalFS / API Connectors
-                                 ▼
-┌─────────────────────────────────────────────────────────────────┐
-│             DNA Core: Incremental ETL Engine                    │
-│   - Target = F(Source) Declarative Mapping                      │
-│   - Delta-only (Δ) Processing via memo=True                     │
-│   - End-to-End Lineage Tracking                                 │
-└────────────────────────────────┬────────────────────────────────┘
-                                 │ Chunking & Embedding
-                                 ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                         Target Stores                           │
-│   - Vector DB (SQLite/LanceDB)                                  │
-│   - Graph DB (SurrealDB - Concept Relations)                    │
-│   - Relational Metadata                                         │
-└────────────────────────────────┬────────────────────────────────┘
-                                 │ Hybrid Retrieval
-                                 ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                        Retrieval Layer                          │
-│   - Lexical + Semantic + Graph Search                           │
-│   - Semantic Routing & Query Expansion                          │
-└────────────────────────────────┬────────────────────────────────┘
-                                 │ MCP Protocol
-                                 ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                          MCP Server                             │
-│   - Claude Code / Cursor / AI Agent Integration                 │
-└─────────────────────────────────────────────────────────────────┘
-```
+
+| Layer | Responsibility | Current implementation | Planned alternatives |
+|-------|----------------|------------------------|----------------------|
+| **Sources** | Watch local content | `pocketindex/connectors/localfs.py` (markdown, code, images) | API/bookmark connectors |
+| **DNA Core** | Incremental `Target = F(Source)` ETL | `pocketindex/` engine (fingerprint memo, state-diff, deletion sweep) | native `cocoindex` runtime (P8 PoC) |
+| **Target Stores** | Persist vectors, lexical index, graph | SQLite + `sqlite-vec` + FTS5 + `entities`/`relations` tables | LanceDB (POCKET-606), external pgvector/graph |
+| **Retrieval** | Fuse strategies into ranked context | `pocket/retrieval.py` (router, expansion, RRF, optional MMR/reranker/HyDE) | — |
+| **Serve** | Expose to humans & agents | CLI, `pocket-mcp`, `pocket serve` (REST + Web UI) | SSE transport |
+
+
 
 ---
 

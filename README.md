@@ -340,7 +340,7 @@ curl -X POST http://127.0.0.1:8000/pending/approve -H 'Content-Type: application
 
 
 ---
----
+
 
 ## ⚡ 2026 SOTA Research Improvements
 
@@ -350,9 +350,11 @@ Four SOTA improvements from recent ML research, all **opt-in** and backward-comp
 
 After hybrid RRF fusion, a lightweight cross-encoder (`cross-encoder/ms-marco-MiniLM-L-6-v2`, 33 MB) re-scores each candidate with full query × passage attention. This two-stage retrieve-then-rerank pattern consistently gains +5–15% MRR over single-stage dense retrieval on BEIR benchmarks.
 
-bash
+```bash
 pocket search "incremental sync" --rerank          # enable per-query
 POCKET_RERANKER=1 pocket search "incremental sync" # enable globally
+```
+
 
 
 Upgrade path: set `POCKET_RERANKER_MODEL=BAAI/bge-reranker-v2-m3` for a multilingual SOTA model.
@@ -361,27 +363,33 @@ Upgrade path: set `POCKET_RERANKER_MODEL=BAAI/bge-reranker-v2-m3` for a multilin
 
 Before vector search, Ollama generates a short "hypothetical answer" passage for the query. The embedding of that passage (not the query string) is used as the search vector — bridging the query–document vocabulary gap that asymmetric embedding models still leave. BM25 always uses the original query; silent fallback to original query if Ollama is unavailable.
 
-bash
+```bash
 pocket search "how does semantic chunking work" --hyde
 pocket search "how does semantic chunking work" --hyde --rerank  # stack both
+```
+
 
 
 ### 3. Semantic Chunking (`POCKET_SEMANTIC_SPLIT=1`)
 
 Replaces fixed-character splitting with embedding-guided boundary detection for prose and Markdown. Sentences are encoded in one batch pass; a cosine-drop threshold marks paragraph-level meaning shifts as chunk boundaries. Code files always use `RecursiveSplitter` (structure > semantics for code).
 
-bash
+```bash
 POCKET_SEMANTIC_SPLIT=1 pocket update   # re-index with semantic chunks
 POCKET_SEMANTIC_SPLIT_THRESHOLD=0.25    # tighter threshold → more/smaller chunks
+```
+
 
 
 ### 4. LLM-as-Judge Evaluation (`pocket eval --with-judge`)
 
 Adds RAGAS-style **Faithfulness** and **Answer Relevance** scoring alongside standard IR metrics. A local Ollama model grades each retrieved chunk against the query on a 0–1 scale; scores are averaged and reported in the eval summary. Neutral (0.5) fallback when Ollama is unavailable — standard IR metrics are never affected.
 
-bash
+```bash
 pocket eval --with-judge                          # judge with default model
 pocket eval --with-judge --judge-model qwen3:8b  # choose the judge model
+```
+
 
 
 ### 5. Schema-constrained JSON Extraction
@@ -400,7 +408,7 @@ Design docs live under [`docs/architecture/`](docs/architecture/):
 - [`graph-target.md`](docs/architecture/graph-target.md) — Graph Target & Knowledge-Graph Ops design spec: entity/relation extraction and the GraphRAG branch (POCKET-404).
 - [`ops-layer.md`](docs/architecture/ops-layer.md) — Ops Layer: evaluation, tracing, and the human-in-the-loop (HITL) review gate.
 - [`mcp-server.md`](docs/architecture/mcp-server.md) — Model Context Protocol (MCP) Integration: how Pocket exposes tools to Claude Code / Cursor.
-- [`mcp-server.md`](docs/architecture/mcp-server.md) — Model Context Protocol (MCP) Integration: how Pocket exposes tools to Claude Code / Cursor.
+
 - [`2026-research-improvements.md`](docs/architecture/2026-research-improvements.md) — 2026 SOTA improvements: reranker, HyDE, semantic chunking, LLM judge, schema-constrained extraction — design rationale, SOTA model comparisons, and priority matrix.
 
 ---

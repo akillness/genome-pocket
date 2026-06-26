@@ -34,9 +34,10 @@ This allows the agent to cite its sources precisely and lets the user click thro
 
 To prevent retrieval quality regressions, Pocket includes a lightweight local evaluation suite:
 
-- **Synthetic Query Generation:** Uses a local LLM to generate test queries from a subset of notes.
-- **Retrieval Metrics:** Measures **Precision@K**, **Recall@K**, and **Mean Reciprocal Rank (MRR)** against the synthetic dataset.
-- **Regression Testing:** Runs automatically before major changes to chunk size, overlap, or embedding models are committed.
+- **Synthetic Case Generation:** `synthesize_cases` mines the *existing index* — deterministically, with no LLM — joining each file's most distinctive tokens (lowest cross-file document frequency) into a self-labeled query whose only correct answer is that file.
+- **Retrieval Metrics:** Measures **Hit@k**, **Precision@k**, **Recall@k**, **MRR**, and **MAP@k** against the same `retrieval.search` path real queries take.
+- **Regression Guard:** `pocket eval --baseline <json> --tolerance` exits non-zero when any metric drops below a saved baseline — drop-in for CI. Optional `--with-judge` adds RAGAS-style Faithfulness/Relevance via a local Ollama model.
+
 
 ---
 
@@ -44,12 +45,16 @@ To prevent retrieval quality regressions, Pocket includes a lightweight local ev
 
 For sensitive operations or complex graph updates, Pocket introduces an interactive approval gate:
 
+```mermaid
+flowchart LR
+    A["Pipeline Run<br/>(graph extract)"] --> B["Confidence gate<br/>POCKET_GRAPH_MIN_CONFIDENCE"]
+    B -->|below threshold| C["Stage as pending"]
+    C --> D["Show diff<br/>CLI / Web UI panel"]
+    D --> E["User approve / reject"]
+    E -->|approve| F["Commit to entities/relations"]
+    E -->|reject| G["Discard staged facts"]
 ```
-[ Pipeline Run ] ──> [ Detect Sensitive/Graph Change ] ──> [ Pause Execution ]
-                                                                 │
-                                                                 ▼
-[ Resume/Abort ] <── [ User Approval (CLI/UI) ] <───────── [ Show Diff ]
-```
+
 
 ### Implementation Pattern
 Using a local CLI prompt or a web UI, Pocket pauses execution and displays a diff of the proposed changes:

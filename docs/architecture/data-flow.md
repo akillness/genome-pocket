@@ -6,30 +6,31 @@ This document details the data flow within **Pocket**, illustrating how source f
 
 ## Data Flow Diagram
 
+```mermaid
+flowchart TD
+    A["📄 Source File<br/>notes/idea.md, src/app.py"] -->|localfs.walk_dir| B["FileLike Object"]
+    B -->|"TextRefiner.refine<br/>normalize + offset map"| C["RefinedDocument"]
+    C -->|"process_file · @fn(memo=True)"| D["RecursiveSplitter<br/>code-aware chunks"]
+    D -->|process_chunk| E["SentenceTransformerEmbedder<br/>vector embedding"]
+    E -->|IdGenerator| F["Stable Chunk ID"]
+    F -->|declare_row| G["Target Table<br/>SQLite + sqlite-vec"]
+    G --> H["FTS5 lexical index<br/>BM25"]
+    G --> I["vector + lineage rows"]
 ```
-[ Source File ] (e.g., notes/idea.md)
-      │
-      ▼ (localfs.walk_dir)
-[ FileLike Object ]
-      │
-      ▼ (TextRefiner.refine - normalize + offset map)
-[ RefinedDocument ]
-      │
-      ▼ (process_file - memo=True)
-[ RecursiveSplitter ] ──> Generates Chunks (offsets remapped to source)
-      │
-      ▼ (process_chunk)
-[ SentenceTransformerEmbedder ] ──> Generates Vector Embedding
-      │
-      ▼ (IdGenerator)
-[ Stable Chunk ID ]
-      │
-      ▼ (declare_row)
-[ Target Table ] (SQLite + sqlite-vec)  ──┬──> [ FTS5 lexical index ]
-                                          └──> vector + lineage rows
 
+### Stage reference
+
+| # | Stage | Component | Input → Output | Incremental behaviour |
+|---|-------|-----------|----------------|-----------------------|
+| 1 | Source | `localfs.walk_dir` | directory → `FileLike` stream | catch-up scan or live `signature()` watch |
+| 1b | Refine | `TextRefiner.refine` | raw bytes → `RefinedDocument` (+ offset map) | deterministic, lineage-preserving |
+| 2 | Memoize | `process_file` (`@fn(memo=True)`) | file → skip / reprocess | content + logic fingerprint key |
+| 3 | Chunk | `RecursiveSplitter` | text → `Chunk[]` (offsets remapped to source) | code-aware boundaries |
+| 4 | Embed | `SentenceTransformerEmbedder` | chunk → vector | re-embeds on model change (folded in fingerprint) |
+| 5 | Load | `declare_row` → `TableTarget` | rows → SQLite + `sqlite-vec` + FTS5 | per-row state-diff (`insert`/`replace`/skip) + orphan sweep |
 
 ---
+
 
 ## Step-by-Step Execution
 

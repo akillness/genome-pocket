@@ -175,9 +175,16 @@ canonical entity ids before `end_source` commits the subgraph.
 ## 5. Pipeline wiring (`pocket/pipeline.py`)
 
 
-process_file ─(memo)→ chunks ─→ process_chunk ──→ embeddings  (today)
-                                      └─(if --graph)→ extract_graph ──→ entities/relations
-                                                                    └→ resolve_entities (post-pass)
+```mermaid
+flowchart LR
+    PF["process_file<br/>(memo)"] --> CH["chunks"]
+    CH --> PC["process_chunk"]
+    PC --> EM["embeddings (today)"]
+    CH -.->|"if --graph"| EG["extract_graph"]
+    EG --> ER["entities / relations"]
+    EG --> RE["resolve_entities<br/>(post-pass)"]
+```
+
 
 
 - Add `EntityNode` / `RelationEdge` dataclasses mirroring `ChunkEmbedding`.

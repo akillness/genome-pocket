@@ -8,37 +8,27 @@ This document describes the design of the **Retrieval Layer** in Pocket, which c
 
 To achieve high-quality retrieval, Pocket combines three distinct search strategies:
 
+```mermaid
+flowchart TD
+    Q["User Query"] --> R["Semantic Router<br/>(POCKET-504, mode=auto)"]
+    R --> L["Lexical Search<br/>BM25 / FTS5"]
+    R --> V["Vector Search<br/>cosine via sqlite-vec"]
+    R --> G["Graph Search<br/>entities/relations tables"]
+    L --> F["Reciprocal Rank Fusion<br/>(weighted, POCKET-502)"]
+    V --> F
+    G --> F
+    F --> M["Optional MMR re-rank /<br/>cross-encoder rerank"]
+    M --> O["Retrieved Chunks<br/>with byte-exact lineage"]
 ```
-                    ┌──────────────────┐
-                    │    User Query    │
-                    └────────┬─────────┘
-                             │
-                             ▼
-                    ┌──────────────────┐
-                    │ Semantic Router  │
-                    └────────┬─────────┘
-                             │
-         ┌───────────────────┼───────────────────┐
-         ▼                   ▼                   ▼
-┌─────────────────┐ ┌─────────────────┐ ┌─────────────────┐
-│ Lexical Search  │ │  Vector Search  │ │  Graph Search   │
-│  (BM25 / FTS5)  │ │ (Cosine/L2 Sim) │ │ (SurrealDB/Neo4j│
-└────────┬────────┘ └────────┬────────┘ └────────┬────────┘
-         │                   │                   │
-         └───────────────────┼───────────────────┘
-                             │
-                             ▼
-                    ┌──────────────────┐
-                    │  Reciprocal Rank │
-                    │   Fusion (RRF)   │
-                    └────────┬─────────┘
-                             │
-                             ▼
-                    ┌──────────────────┐
-                    │ Retrieved Chunks │
-                    │   with Lineage   │
-                    └──────────────────┘
-```
+
+| Strategy | Best for | Backend | Toggle |
+|----------|----------|---------|--------|
+| **Lexical** (BM25/FTS5) | exact keywords, symbols, error codes | SQLite FTS5 | `--mode lexical` |
+| **Vector** (cosine) | conceptual meaning, synonyms | `sqlite-vec` | `--mode vector` |
+| **Graph** (multi-hop) | relationships between concepts | `entities`/`relations` SQLite tables | `--mode graph` |
+| **Hybrid** (default) | balanced recall + precision | RRF over the above | `--mode hybrid` |
+| **Auto** | pick mode from query shape | semantic router | `--mode auto` |
+
 
 ---
 
@@ -50,11 +40,12 @@ To achieve high-quality retrieval, Pocket combines three distinct search strateg
 
 ### 2. Vector Search (Semantic)
 - **Purpose:** Matches conceptual meaning and synonyms, even when exact keywords differ.
-- **Implementation:** Uses `sqlite-vec` or LanceDB to perform cosine similarity search on the generated embeddings.
+- **Implementation:** Uses `sqlite-vec` cosine similarity over the chunk embeddings (LanceDB is a planned alternative target for very large corpora, POCKET-606).
 
 ### 3. Graph Search (Conceptual Relationships)
 - **Purpose:** Traverses relationships between concepts (e.g., `Project A` -> `depends on` -> `Library B`).
-- **Implementation:** Queries SurrealDB or a local graph database to retrieve connected nodes and relationships related to the query terms.
+- **Implementation:** Multi-hop traversal over the local `entities`/`relations` SQLite tables populated by the opt-in GraphRAG branch (`pocket update --graph`).
+
 
 ---
 

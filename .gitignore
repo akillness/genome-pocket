@@ -13,5 +13,3 @@ __pycache__/
 
 # Exceptions: keep these tracked
 !.gitignore
-# .survey holds committed research output — keep it versioned
-!.survey/

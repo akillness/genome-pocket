@@ -11,6 +11,26 @@ Engine-parity hardening cycle, cross-checked against upstream `cocoindex` (1.0.1
 by installing it in an isolated venv and diffing its public API against the
 vendored `pocketindex` engine.
 
+### Fixed
+- **`POCKET_HYDE_OLLAMA_HOST` env var now actually read.** The README documented
+  `POCKET_HYDE_OLLAMA_HOST` but `pocket/config.py` only consulted `OLLAMA_HOST`,
+  making the documented variable a silent no-op. Config now resolves
+  `POCKET_HYDE_OLLAMA_HOST` first and falls back to `OLLAMA_HOST`, then the
+  `127.0.0.1:11434` default — backward compatible for existing `OLLAMA_HOST` users.
+- **MCP `search_knowledge` accepts `mode="auto"` (serve-surface parity).** The
+  CLI (`--mode auto`) and REST API (`?mode=auto`) already engaged the POCKET-504
+  semantic router, but the MCP tool rejected `auto` — the only serve surface
+  without it. The tool now accepts the same five modes
+  (`auto|hybrid|vector|lexical|graph`) as the other two surfaces. Covered by new
+  assertions in `tests/test_pipeline.py::test_mcp_tools`.
+- **README drift corrected against the code.** Semantic-chunking threshold docs
+  now state the real default (`0.7`) and the correct direction (higher floor →
+  more/smaller chunks; the old text inverted it); the MCP tools list includes the
+  fourth tool `traverse_graph`; usage covers `pocket update --full-reprocess`,
+  `pocket update --graph --review`, and the `pocket graph review` HITL flow; the
+  project-structure tree includes `pocketindex/stats.py`, `tests/`, `eval/`,
+  `run_tests.sh`, and `CHANGELOG.md`.
+
 ### Added
 - **Push-style live mode (POCKET-W2, cocoindex live push).** Live indexing is
   now change-driven instead of blind interval polling. Source connectors

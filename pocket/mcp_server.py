@@ -15,12 +15,14 @@ def search_knowledge(query: str, limit: int = 5, mode: str = "hybrid") -> str:
     Args:
         query: The search query.
         limit: Maximum number of results to return.
-        mode: Retrieval strategy - 'hybrid' (default), 'vector', 'lexical', or 'graph'.
+        mode: Retrieval strategy - 'hybrid' (default), 'vector', 'lexical',
+            'graph', or 'auto' (the semantic router picks the mode from the
+            query's shape, POCKET-504).
     """
     if not config.POCKET_SQLITE_DB.exists():
         return "Database does not exist. Please run 'pocket update' first."
-    if mode not in ("hybrid", "vector", "lexical", "graph"):
-        return "mode must be one of: hybrid, vector, lexical, graph."
+    if mode not in ("auto", "hybrid", "vector", "lexical", "graph"):
+        return "mode must be one of: auto, hybrid, vector, lexical, graph."
 
     hits = retrieval.search(query, limit=limit, mode=mode)
     return retrieval.format_hits(hits)

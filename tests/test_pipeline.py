@@ -90,6 +90,14 @@ class TestPocketPipeline(unittest.TestCase):
         self.assertIn("test_note.md", search_result)
         self.assertIn("Test Note", search_result)
         
+        # "auto" engages the POCKET-504 router (parity with CLI/REST surfaces)
+        auto_result = search_knowledge("Pocket", mode="auto")
+        self.assertIn("test_note.md", auto_result)
+        
+        # invalid modes are rejected with the mode list
+        bad_result = search_knowledge("Pocket", mode="bogus")
+        self.assertIn("mode must be one of", bad_result)
+        
         # Test get_file_lineage tool
         # We need to pass the exact file path stored in the DB
         conn = sqlite3.connect(str(self.db_path))

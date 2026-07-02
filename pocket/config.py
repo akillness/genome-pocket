@@ -34,7 +34,7 @@ POCKET_RERANKER_TOP_N = int(os.getenv("POCKET_RERANKER_TOP_N", "20"))
 # HyDE arXiv:2212.10496 — opt-in; requires Ollama; falls back to raw query when daemon absent
 POCKET_HYDE              = _truthy(os.getenv("POCKET_HYDE", ""))
 POCKET_HYDE_OLLAMA_MODEL = os.getenv("POCKET_HYDE_OLLAMA_MODEL", "qwen3:0.6b")
-POCKET_HYDE_OLLAMA_HOST  = os.getenv("OLLAMA_HOST", "http://127.0.0.1:11434")
+POCKET_HYDE_OLLAMA_HOST  = os.getenv("POCKET_HYDE_OLLAMA_HOST") or os.getenv("OLLAMA_HOST") or "http://127.0.0.1:11434"
 
 # Semantic splitter — opt-in; code files always use RecursiveSplitter regardless
 POCKET_SEMANTIC_SPLIT           = _truthy(os.getenv("POCKET_SEMANTIC_SPLIT", ""))

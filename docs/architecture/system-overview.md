@@ -28,7 +28,7 @@ flowchart TD
 | **Sources** | Watch local content | `pocketindex/connectors/localfs.py` (markdown, code, images) | API/bookmark connectors |
 | **DNA Core** | Incremental `Target = F(Source)` ETL | `pocketindex/` engine (fingerprint memo, state-diff, deletion sweep) | native `cocoindex` runtime (P8 PoC) |
 | **Target Stores** | Persist vectors, lexical index, graph | SQLite + `sqlite-vec` + FTS5 + `entities`/`relations` tables | LanceDB (POCKET-606), external pgvector/graph |
-| **Retrieval** | Fuse strategies into ranked context | `pocket/retrieval.py` (router, expansion, RRF, optional MMR/reranker/HyDE) | — |
+| **Retrieval** | Fuse strategies into ranked context | `pocket/retrieval/` (router, expansion, RRF, optional MMR/reranker/HyDE) | — |
 | **Serve** | Expose to humans & agents | CLI, `pocket-mcp`, `pocket serve` (REST + Web UI) | SSE transport |
 
 

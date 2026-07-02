@@ -42,6 +42,7 @@ pocket-api = "pocket.api_server:main"
 [tool.setuptools]
 packages = [
     "pocket",
+    "pocket.retrieval",
     "pocketindex",
     "pocketindex.connectors",
     "pocketindex.ops",
@@ -52,3 +53,6 @@ packages = [
 dev = [
     "pytest>=9.1.0",
 ]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]

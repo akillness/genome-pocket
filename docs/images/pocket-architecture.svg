@@ -102,7 +102,7 @@
   <rect width="190" height="360" rx="12" fill="url(#a-xf)" stroke="#60A5FA" stroke-width="1"/>
   <rect width="190" height="42" rx="12" fill="#1E3A8A" fill-opacity="0.65"/>
   <text x="95" y="20" text-anchor="middle" font-size="13" font-weight="bold" fill="#DBEAFE">3 · Transform</text>
-  <text x="95" y="35" text-anchor="middle" font-size="9" fill="#BFDBFE">PocketIndex ETL</text>
+  <text x="95" y="35" text-anchor="middle" font-size="9" fill="#BFDBFE">pocketindex app/runtime/memo</text>
   <!-- SPLIT -->
   <rect x="12" y="54" width="166" height="46" rx="8" fill="#FFF" fill-opacity="0.1" stroke="#93C5FD" stroke-opacity="0.4" stroke-width="0.8"/>
   <text x="95" y="74" text-anchor="middle" font-size="10.5" font-weight="600" fill="#DBEAFE">RecursiveSplitter</text>
@@ -126,7 +126,7 @@
   <rect x="12" y="242" width="166" height="46" rx="8" fill="#1E3A8A" fill-opacity="0.75"/>
   <text x="95" y="262" text-anchor="middle" font-size="10.5" font-weight="600" fill="#DBEAFE">IdGenerator</text>
   <text x="95" y="278" text-anchor="middle" font-size="9" fill="#93C5FD">deterministic IDs · memo</text>
-  <text x="95" y="348" text-anchor="middle" font-size="8.5" fill="#60A5FA" fill-opacity="0.6">split · embed · id · memo</text>
+  <text x="95" y="348" text-anchor="middle" font-size="8.5" fill="#60A5FA" fill-opacity="0.6">runtime · map · mount_each</text>
 </g>
 
 <!-- 4 · LOAD ─────────────────────────────────────────────────── -->
@@ -155,7 +155,7 @@
   <rect width="328" height="360" rx="12" fill="url(#a-sv)" stroke="#FCD34D" stroke-width="1"/>
   <rect width="328" height="42" rx="12" fill="#451A03" fill-opacity="0.65"/>
   <text x="164" y="20" text-anchor="middle" font-size="13" font-weight="bold" fill="#FEF3C7">5 · Serve</text>
-  <text x="164" y="35" text-anchor="middle" font-size="9" fill="#FDE68A">retrieval.py</text>
+  <text x="164" y="35" text-anchor="middle" font-size="9" fill="#FDE68A">retrieval package facade</text>
   <!-- HYDE SOTA -->
   <g filter="url(#a-glow-sota)">
     <rect x="12" y="50" width="304" height="54" rx="8" fill="#1C1917" stroke="#F59E0B" stroke-width="1.6"/>
@@ -169,8 +169,8 @@
   <path d="M 164 104 L 164 115" stroke="#F59E0B" stroke-width="1.2" stroke-dasharray="3 2" fill="none" marker-end="url(#a-arr-sota)"/>
   <!-- RRF -->
   <rect x="12" y="115" width="304" height="48" rx="8" fill="#FFF" fill-opacity="0.12" stroke="#FDE68A" stroke-opacity="0.4" stroke-width="0.8"/>
-  <text x="164" y="135" text-anchor="middle" font-size="10.5" font-weight="600" fill="#FEF3C7">Hybrid Retrieval · RRF</text>
-  <text x="164" y="152" text-anchor="middle" font-size="9" fill="#FCD34D">vector + lexical (+ graph) · Reciprocal Rank Fusion · MMR</text>
+  <text x="164" y="135" text-anchor="middle" font-size="10.5" font-weight="600" fill="#FEF3C7">router → search → fusion</text>
+  <text x="164" y="152" text-anchor="middle" font-size="9" fill="#FCD34D">vector + lexical (+ graph) · RRF · MMR</text>
   <!-- RRF→RERANK solid -->
   <path d="M 164 163 L 164 175" stroke="#94A3B8" stroke-width="1.5" fill="none" marker-end="url(#a-arr)"/>
   <!-- RERANK SOTA -->
@@ -193,7 +193,7 @@
   <text x="164" y="280" text-anchor="middle" font-size="9" font-weight="600" fill="#FEF3C7">MCP</text>
   <rect x="220" y="264" width="88" height="24" rx="5" fill="#FFF" fill-opacity="0.1" stroke="#FDE68A" stroke-opacity="0.35" stroke-width="0.8"/>
   <text x="264" y="280" text-anchor="middle" font-size="9" font-weight="600" fill="#FEF3C7">REST + Web UI</text>
-  <text x="164" y="348" text-anchor="middle" font-size="8.5" fill="#FCD34D" fill-opacity="0.6">fuse · rerank · surface · 3 interfaces</text>
+  <text x="164" y="348" text-anchor="middle" font-size="8.5" fill="#FCD34D" fill-opacity="0.6">search · graph · rerank · surfaces</text>
 </g>
 
 <!-- ═══════════════════════════════════════════════════════════
@@ -273,7 +273,7 @@
 <rect x="582" y="598" width="56" height="16" rx="4" fill="#1C1917" stroke="#F59E0B" stroke-width="1"/>
 <text x="610" y="610" text-anchor="middle" font-size="8" font-weight="bold" fill="#FDE68A">⚡ OPT-IN</text>
 <text x="648" y="610" font-size="9" fill="#F59E0B">= 2026 SOTA improvement (all default OFF · backward-compatible)</text>
-<text x="1184" y="610" text-anchor="end" font-size="8.5" fill="#475569">genome-pocket · pocketindex vendored engine</text>
+<text x="1184" y="610" text-anchor="end" font-size="8.5" fill="#475569">modular retrieval/ + pocketindex facade</text>
 
 <!-- ─── Stage number strip ────────────────────────────────── -->
 <text x="111"  y="68" text-anchor="middle" font-size="9" fill="#818CF8" fill-opacity="0.6">①</text>
@@ -283,5 +283,5 @@
 <text x="1020" y="68" text-anchor="middle" font-size="9" fill="#FCD34D" fill-opacity="0.6">⑤</text>
 
 <!-- Footer -->
-<text x="600" y="714" text-anchor="middle" font-size="9" fill="#334155">Self-contained vendored engine (pocketindex) — no external pip ETL dependency · genome-pocket © MIT</text>
+<text x="600" y="714" text-anchor="middle" font-size="9" fill="#334155">Self-contained vendored engine (pocketindex app/context/runtime/memo) · genome-pocket © MIT</text>
 </svg>

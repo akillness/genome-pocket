@@ -39,13 +39,20 @@ Pocket operates on the core mental model of **Target = F(Source)**. All data pro
    - **Optional multimodal (image) search:** set `EMBEDDING_MODEL=google/siglip2-base-patch16-224` to use the Apache-2.0 SigLIP2 backend, which embeds both text and images into one shared space. Image files (`.png/.jpg/.jpeg/.webp/.gif/.bmp/.tiff`) in your notes are then indexed (one vector per image) and become searchable with plain text queries through the same hybrid path. Install the extra with `pip install -e ".[multimodal]"`.
    - Generates stable, deterministic IDs using `IdGenerator` to ensure lineage and idempotency.
 4. **Load (SQLite + sqlite-vec + FTS5):** Stores chunk text, embeddings, and lineage metadata (file path, start/end offsets) in a local SQLite database. The same load mirrors chunk text into an FTS5 index so the target supports both vector and lexical (BM25) search.
-5. **Serve (hybrid retrieval):** A single retrieval layer (`pocket/retrieval.py`) fuses vector + lexical results via Reciprocal Rank Fusion and is exposed three ways:
+5. **Serve (hybrid retrieval):** A modular retrieval package (`pocket/retrieval/`) fuses vector + lexical results via Reciprocal Rank Fusion and is exposed three ways:
    - **CLI:** `pocket search "query" --mode auto|hybrid|vector|lexical|graph` (`auto` = the POCKET-504 semantic router: pick the mode from the query's shape)
 
    - **MCP Server:** `pocket-mcp` for Claude Code / Cursor.
    - **REST API Server:** `pocket serve` / `pocket-api` (Starlette + uvicorn) with `/health`, `/search`, `/lineage`, `/trace`, and a built-in **Web UI** at `/` that visualizes query routing and chunk lineage.
 6. **Knowledge Graph (optional, GraphRAG):** An opt-in branch (`pocket update --graph`) extracts entities/relations into graph tables using a local extractor (`deterministic` default, or `ollama`/`airllm`), reusing the same incremental lineage/memoization/deletion sweep. Query a neighborhood with `pocket graph "<entity>"`.
 7. **Evaluate (regression harness):** `pocket eval` scores retrieval quality (Hit@k, MRR, Precision/Recall@k, MAP) over synthetic or hand-written cases against the **same** `retrieval.search` path, and fails CI when a metric regresses past a saved baseline.
+
+### Internal module boundaries
+
+The two historically large read paths are now split into small modules while preserving their import facades:
+
+- `pocket/retrieval/` keeps `from pocket import retrieval` stable and separates `router.py` (mode resolution), `search.py` (candidate gathering), `fusion.py` (RRF), `rerank.py` (MMR/HyDE/cross-encoder), `graph.py` (GraphRAG reads), and `inspect.py` (lineage/trace formatting).
+- `pocketindex/` keeps the CocoIndex-style `import pocketindex as pix` facade stable while moving runtime concerns into `app.py`, `context.py`, `runtime.py`, and `memo.py`.
 
 
 ---
@@ -65,9 +72,14 @@ genome-pocket/
 
 ├── notes/                    # Local markdown notes directory (source)
 ├── pocketindex/              # Self-contained ETL engine (vendored, no pip dep)
-│   ├── __init__.py           # App, lifespan, fn, map, mount_each, context
-│   ├── connectors/           # localfs source + sqlite target (lineage/memo + FTS5)
-│   ├── ops/                  # embedder, splitter, refiner + graph extract/entity_resolution ops
+│   ├── __init__.py           # Package facade & compatibility re-exports
+│   ├── app.py                # App class: catches lifespan context, orchestrates active runs & live mode
+│   ├── context.py            # ContextKey, EnvironmentBuilder, contextvars & lifespan storage
+│   ├── memo.py               # Logic and content fingerprinting (custom or cocoindex fallback)
+│   ├── runtime.py            # Runtime helpers: @fn decorator, async map, mount_each ETL engine
+│   ├── stats.py              # Per-component processing counters (adds/reprocesses/deletes/…)
+│   ├── connectors/           # localfs source (+ change signature) + sqlite target (lineage/memo + FTS5)
+│   ├── ops/                  # text refine/split (Recursive/Separator/Semantic), sentence-transformer & SigLIP2 embedders, graph extract + entity resolution
 │   └── resources/            # file, chunk, deterministic id helpers
 ├── pocket/                   # Application source code
 │   ├── __init__.py
@@ -75,16 +87,30 @@ genome-pocket/
 │   ├── config.py             # Configuration & environment variables
 │   ├── pipeline.py           # ETL pipeline wiring (Source→Refine→Load + graph)
 │   ├── pipeline_native.py    # Native cocoindex PoC pipeline (side-by-side, opt-in)
-│   ├── retrieval.py          # Hybrid retrieval (vector + lexical + RRF) + routing_trace, shared by CLI/MCP/API
+│   ├── retrieval/            # Modular hybrid retrieval package
+│   │   ├── __init__.py       # Package facade, public API & dynamic test-patch facade
+│   │   ├── base.py           # RetrievalHit dataclass, RRF_K and _FTS_TABLE constants
+│   │   ├── db.py             # SQLite connection loaders, FTS & graph status validation
+│   │   ├── encode.py         # Embedding model caching and query vector encoding
+│   │   ├── search.py         # Main search entry points, BM25 lexical search, gather logic
+│   │   ├── router.py         # POCKET-504 regex query router & mode resolver
+│   │   ├── fusion.py         # Reciprocal Rank Fusion (RRF) rank folding & scoring
+│   │   ├── rerank.py         # MMR diversity, HyDE Ollama passage generator, cross-encoder
+│   │   ├── graph.py          # GraphRAG multi-hop retrieval, neighborhood lookup, formatting
+│   │   └── inspect.py        # Lineage queries, search tracing UI representation, format helpers
 │   ├── admin.py              # Write-side lifecycle ops (drop/reset target + companions)
 │   ├── evaluation.py         # Retrieval regression harness (Hit@k/MRR/MAP, baselines)
 │   ├── mcp_server.py         # MCP server interface
 │   ├── api_server.py         # REST API server (Starlette + uvicorn): /search /lineage /trace + Web UI
 │   └── web_ui.py             # Dependency-free query-tracing & lineage Web UI (served at /)
 
+├── tests/                    # Offline pytest suite (169 tests, MockEmbedder session patch)
+├── eval/                     # Hand-written eval corpus + gold.json cases for `pocket eval`
+├── run_tests.sh              # One-shot offline test runner
 ├── .env                      # Environment configuration
 ├── main.py                   # CLI entry point
 ├── pyproject.toml            # Project dependencies and scripts
+├── CHANGELOG.md              # Release / change history
 └── README.md                 # Project README
 ```
 
@@ -176,13 +202,13 @@ POCKET_RERANKER_TOP_N=20             # candidates fed into the reranker
 # to the original query if Ollama is unavailable.
 POCKET_HYDE=0
 # POCKET_HYDE_OLLAMA_MODEL=qwen3:0.6b
-# POCKET_HYDE_OLLAMA_HOST=http://localhost:11434
+# POCKET_HYDE_OLLAMA_HOST=http://localhost:11434  # falls back to OLLAMA_HOST, then 127.0.0.1:11434
 
 # Semantic chunking (POCKET-603) — splits on embedding-guided meaning boundaries
 # instead of fixed character counts. Only applied to prose/markdown; code files
 # always use RecursiveSplitter. Falls back on encoding failure.
 POCKET_SEMANTIC_SPLIT=0
-# POCKET_SEMANTIC_SPLIT_THRESHOLD=0.3  # cosine-drop threshold for a new chunk
+# POCKET_SEMANTIC_SPLIT_THRESHOLD=0.7  # cosine floor: a boundary starts where consecutive-sentence similarity drops below it (higher → more/smaller chunks)
 
 ```
 
@@ -211,8 +237,9 @@ pocket update
 
 Run in live mode (watches for file changes in real-time, re-indexing on a polling interval):
 ```bash
-pocket update -L                  # poll every 2s (default)
-pocket update -L --interval 5     # poll every 5s
+pocket update -L                  # change-driven live loop (idle = cheap stat scan)
+pocket update -L --interval 5     # fallback poll cadence for non-watchable sources
+pocket update --full-reprocess    # force a clean rebuild (re-runs every transform; state-diff still dedups row writes)
 ```
 
 Every pass prints per-component processing statistics (adds / reprocesses /
@@ -260,8 +287,12 @@ by `POCKET_LLM_PROVIDER`:
 ```bash
 pocket update --graph                          # extract entities/relations alongside chunks
 POCKET_LLM_PROVIDER=ollama pocket update --graph   # use a local Ollama model instead
+pocket update --graph --review                 # then walk staged low-confidence facts interactively (HITL)
 pocket graph "Pocket"                          # print an entity's neighborhood (relations)
 pocket graph "Pocket" --limit 20               # cap the number of relations shown
+pocket graph review                            # list facts staged by the confidence gate
+pocket graph review --approve 123 --reject 456 # commit / discard specific staged facts
+pocket graph review --approve-all              # or act on everything pending at once
 ```
 
 #### Inspect & Manage the Index
@@ -372,11 +403,12 @@ pocket search "how does semantic chunking work" --hyde --rerank  # stack both
 
 ### 3. Semantic Chunking (`POCKET_SEMANTIC_SPLIT=1`)
 
-Replaces fixed-character splitting with embedding-guided boundary detection for prose and Markdown. Sentences are encoded in one batch pass; a cosine-drop threshold marks paragraph-level meaning shifts as chunk boundaries. Code files always use `RecursiveSplitter` (structure > semantics for code).
+Replaces fixed-character splitting with embedding-guided boundary detection for prose and Markdown. Sentences are encoded in one batch pass; a chunk boundary starts wherever consecutive-sentence cosine similarity drops below the threshold (default `0.7`). Code files always use `RecursiveSplitter` (structure > semantics for code).
 
 ```bash
 POCKET_SEMANTIC_SPLIT=1 pocket update   # re-index with semantic chunks
-POCKET_SEMANTIC_SPLIT_THRESHOLD=0.25    # tighter threshold → more/smaller chunks
+POCKET_SEMANTIC_SPLIT_THRESHOLD=0.8     # higher floor → more boundaries → more/smaller chunks
+POCKET_SEMANTIC_SPLIT_THRESHOLD=0.5     # lower floor → fewer boundaries → larger chunks
 ```
 
 
@@ -429,9 +461,10 @@ To connect Claude Code or Cursor to your Pocket knowledge base, add the followin
 ```
 
 ### Exposed Tools
-- `search_knowledge(query: str, limit: int = 5, mode: str = "hybrid")`: Search the personal knowledge base using hybrid (vector + lexical) retrieval; `mode` is `hybrid`, `vector`, or `lexical`.
+- `search_knowledge(query: str, limit: int = 5, mode: str = "hybrid")`: Search the personal knowledge base; `mode` is `hybrid` (default), `vector`, `lexical`, `graph`, or `auto` (the POCKET-504 semantic router picks the mode from the query's shape) — the same mode set the CLI and REST API accept.
 - `get_file_lineage(file_path: str)`: Retrieve the indexing history and lineage details for a specific source file.
 - `list_concepts(concept: str = None)`: List top entities and their relations from the knowledge graph. Requires a graph built with `pocket update --graph` (`POCKET_GRAPH=1`). Returns up to 20 highest-confidence entities with type, confidence, source file, and top relation. Optional `concept` prefix filters by name.
+- `traverse_graph(entity: str, limit: int = 10)`: Traverse the knowledge graph from an entity and list its relations (1-hop neighborhood) — the MCP counterpart of `pocket graph "<entity>"`. Requires a graph built with `pocket update --graph`.
 
 
 ---

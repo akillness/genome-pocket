@@ -47,6 +47,13 @@ Pocket operates on the core mental model of **Target = F(Source)**. All data pro
 6. **Knowledge Graph (optional, GraphRAG):** An opt-in branch (`pocket update --graph`) extracts entities/relations into graph tables using a local extractor (`deterministic` default, or `ollama`/`airllm`), reusing the same incremental lineage/memoization/deletion sweep. Query a neighborhood with `pocket graph "<entity>"`.
 7. **Evaluate (regression harness):** `pocket eval` scores retrieval quality (Hit@k, MRR, Precision/Recall@k, MAP) over synthetic or hand-written cases against the **same** `retrieval.search` path, and fails CI when a metric regresses past a saved baseline.
 
+### Internal module boundaries
+
+The two historically large read paths are now split into small modules while preserving their import facades:
+
+- `pocket/retrieval/` keeps `from pocket import retrieval` stable and separates `router.py` (mode resolution), `search.py` (candidate gathering), `fusion.py` (RRF), `rerank.py` (MMR/HyDE/cross-encoder), `graph.py` (GraphRAG reads), and `inspect.py` (lineage/trace formatting).
+- `pocketindex/` keeps the CocoIndex-style `import pocketindex as pix` facade stable while moving runtime concerns into `app.py`, `context.py`, `runtime.py`, and `memo.py`.
+
 
 ---
 

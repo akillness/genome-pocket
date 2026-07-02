@@ -31,6 +31,16 @@ vendored `pocketindex` engine.
   project-structure tree includes `pocketindex/stats.py`, `tests/`, `eval/`,
   `run_tests.sh`, and `CHANGELOG.md`.
 
+### Changed
+- **Retrieval and PocketIndex internals split into focused modules.** The public
+  facades remain stable (`from pocket import retrieval`, `import pocketindex as
+  pix`), but the previous monoliths are now organized by responsibility:
+  `pocket/retrieval/{router,search,fusion,rerank,graph,inspect}.py` and
+  `pocketindex/{app,context,runtime,memo}.py`. The split keeps old private helper
+  re-exports used by the in-tree tests, adds `pocket.retrieval` to the explicit
+  setuptools package list, and updates README/SVG diagrams to show the new module
+  boundaries.
+
 ### Added
 - **Push-style live mode (POCKET-W2, cocoindex live push).** Live indexing is
   now change-driven instead of blind interval polling. Source connectors

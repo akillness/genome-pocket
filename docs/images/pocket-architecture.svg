@@ -155,7 +155,7 @@
   <rect width="328" height="360" rx="12" fill="url(#a-sv)" stroke="#FCD34D" stroke-width="1"/>
   <rect width="328" height="42" rx="12" fill="#451A03" fill-opacity="0.65"/>
   <text x="164" y="20" text-anchor="middle" font-size="13" font-weight="bold" fill="#FEF3C7">5 · Serve</text>
-  <text x="164" y="35" text-anchor="middle" font-size="9" fill="#FDE68A">retrieval.py</text>
+  <text x="164" y="35" text-anchor="middle" font-size="9" fill="#FDE68A">retrieval/</text>
   <!-- HYDE SOTA -->
   <g filter="url(#a-glow-sota)">
     <rect x="12" y="50" width="304" height="54" rx="8" fill="#1C1917" stroke="#F59E0B" stroke-width="1.6"/>

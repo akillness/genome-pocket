@@ -197,7 +197,7 @@ flowchart LR
 ## 6. Retrieval integration
 
 GraphRAG (per arXiv:2606.00610 / 2606.17856) adds a **third retriever** alongside vector
-and lexical, fused by the existing RRF in `pocket/retrieval.py`:
+and lexical, fused by the existing RRF in `pocket/retrieval/`:
 
 - **Entity anchoring:** embed the query, vector-search `entities` for seed nodes.
 - **Multi-hop expansion:** 1–2 hop traversal over `relations` from the seeds, collecting the

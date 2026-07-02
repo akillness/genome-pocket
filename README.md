@@ -39,7 +39,7 @@ Pocket operates on the core mental model of **Target = F(Source)**. All data pro
    - **Optional multimodal (image) search:** set `EMBEDDING_MODEL=google/siglip2-base-patch16-224` to use the Apache-2.0 SigLIP2 backend, which embeds both text and images into one shared space. Image files (`.png/.jpg/.jpeg/.webp/.gif/.bmp/.tiff`) in your notes are then indexed (one vector per image) and become searchable with plain text queries through the same hybrid path. Install the extra with `pip install -e ".[multimodal]"`.
    - Generates stable, deterministic IDs using `IdGenerator` to ensure lineage and idempotency.
 4. **Load (SQLite + sqlite-vec + FTS5):** Stores chunk text, embeddings, and lineage metadata (file path, start/end offsets) in a local SQLite database. The same load mirrors chunk text into an FTS5 index so the target supports both vector and lexical (BM25) search.
-5. **Serve (hybrid retrieval):** A single retrieval layer (`pocket/retrieval.py`) fuses vector + lexical results via Reciprocal Rank Fusion and is exposed three ways:
+5. **Serve (hybrid retrieval):** A modular retrieval package (`pocket/retrieval/`) fuses vector + lexical results via Reciprocal Rank Fusion and is exposed three ways:
    - **CLI:** `pocket search "query" --mode auto|hybrid|vector|lexical|graph` (`auto` = the POCKET-504 semantic router: pick the mode from the query's shape)
 
    - **MCP Server:** `pocket-mcp` for Claude Code / Cursor.
@@ -65,7 +65,11 @@ genome-pocket/
 
 ├── notes/                    # Local markdown notes directory (source)
 ├── pocketindex/              # Self-contained ETL engine (vendored, no pip dep)
-│   ├── __init__.py           # App, lifespan, fn, map, mount_each, context, memo/fingerprint
+│   ├── __init__.py           # Package facade & compatibility re-exports
+│   ├── app.py                # App class: catches lifespan context, orchestrates active runs & live mode
+│   ├── context.py            # ContextKey, EnvironmentBuilder, contextvars & lifespan storage
+│   ├── memo.py               # Logic and content fingerprinting (custom or cocoindex fallback)
+│   ├── runtime.py            # Runtime helpers: @fn decorator, async map, mount_each ETL engine
 │   ├── stats.py              # Per-component processing counters (adds/reprocesses/deletes/…)
 │   ├── connectors/           # localfs source (+ change signature) + sqlite target (lineage/memo + FTS5)
 │   ├── ops/                  # text refine/split (Recursive/Separator/Semantic), sentence-transformer & SigLIP2 embedders, graph extract + entity resolution
@@ -76,7 +80,17 @@ genome-pocket/
 │   ├── config.py             # Configuration & environment variables
 │   ├── pipeline.py           # ETL pipeline wiring (Source→Refine→Load + graph)
 │   ├── pipeline_native.py    # Native cocoindex PoC pipeline (side-by-side, opt-in)
-│   ├── retrieval.py          # Hybrid retrieval (vector + lexical + RRF) + routing_trace, shared by CLI/MCP/API
+│   ├── retrieval/            # Modular hybrid retrieval package
+│   │   ├── __init__.py       # Package facade, public API & dynamic test-patch facade
+│   │   ├── base.py           # RetrievalHit dataclass, RRF_K and _FTS_TABLE constants
+│   │   ├── db.py             # SQLite connection loaders, FTS & graph status validation
+│   │   ├── encode.py         # Embedding model caching and query vector encoding
+│   │   ├── search.py         # Main search entry points, BM25 lexical search, gather logic
+│   │   ├── router.py         # POCKET-504 regex query router & mode resolver
+│   │   ├── fusion.py         # Reciprocal Rank Fusion (RRF) rank folding & scoring
+│   │   ├── rerank.py         # MMR diversity, HyDE Ollama passage generator, cross-encoder
+│   │   ├── graph.py          # GraphRAG multi-hop retrieval, neighborhood lookup, formatting
+│   │   └── inspect.py        # Lineage queries, search tracing UI representation, format helpers
 │   ├── admin.py              # Write-side lifecycle ops (drop/reset target + companions)
 │   ├── evaluation.py         # Retrieval regression harness (Hit@k/MRR/MAP, baselines)
 │   ├── mcp_server.py         # MCP server interface
